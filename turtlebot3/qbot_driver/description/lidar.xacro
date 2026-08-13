@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+    <joint name="laser_joint" type="fixed">
+        <!-- Origin obtained by hand measurement (using caliper) -->
+        <!-- chassis length is 575mm, and lidar centre is 64.92mm from front of chassis-->
+        <!-- 575 / 2 - 64.92 = 0.22258 -->
+        <parent link="base_link" />
+        <child link="laser_link" />
+        <origin xyz="0.22258 0 0.2" rpy="0 0 1.5708" />
+    </joint>
+
+
+    <link name="laser_link">
+        <!-- Size obtained from lidar manual -->
+        <visual>
+            <geometry>
+                <cylinder radius="0.03965" length="0.039" />
+            </geometry>
+            <material name="black" />
+        </visual>
+        <collision>
+            <geometry>
+                <cylinder radius="0.03965" length="0.039" />
+            </geometry>
+        </collision>
+    </link>
+</robot>

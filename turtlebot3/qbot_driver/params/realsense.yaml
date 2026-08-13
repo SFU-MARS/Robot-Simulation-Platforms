@@ -1,0 +1,7 @@
+### ekf config file ###
+realsense2_camera_node:
+  ros__parameters:
+    use_sim_time: false
+  # ros__remap: 
+  #   - ["/depth/image_rect_raw", "/depth/image"]
+  #   - ["/camera/color/image_raw", "/camera/camera/color/image_raw"]
