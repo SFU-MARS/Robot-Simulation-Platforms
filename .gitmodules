@@ -7,3 +7,6 @@
 [submodule "mujoco/unitree_mujoco"]
 	path = mujoco/unitree_mujoco
 	url = https://github.com/unitreerobotics/unitree_mujoco
+[submodule "optimized_dp"]
+	path = optimized_dp
+	url = https://github.com/SFU-MARS/optimized_dp.git
