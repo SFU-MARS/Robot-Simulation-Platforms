@@ -2,7 +2,7 @@ import imp
 import numpy as np
 # Utility functions to initialize the problem
 from odp.Grid import Grid
-from odp.Shapes import ShapeRectangle
+from odp.Shapes import *
 
 # # Specify the  file that includes dynamic systems
 from odp.dynamics import DubinsCar2
@@ -84,7 +84,7 @@ result = HJSolver(
                 tau,
                 compMethod,
                 # save all time steps for the reach problem
-                saveAllTimeSteps=True
+                saveAllTimeSteps=False
         )
        
 
@@ -94,9 +94,10 @@ result = HJSolver(
 po = PlotOptions(
         do_plot=True,
         plot_type="set",
-        plotDims=[0,1,2])
+        plotDims=[0,1,2], save_fig = True, filename = "/home/jammy/Robot-Simulation-Platforms-rafael/turtlebot3/plot.png")
 
 plot_isosurface(g,result,po)
+visualize_plots(result, g, po)
 theta_index = 25
 
 costmap = result[:,:,theta_index]
