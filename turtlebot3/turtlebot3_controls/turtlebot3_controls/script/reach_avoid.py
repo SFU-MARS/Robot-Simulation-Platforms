@@ -5,7 +5,7 @@ import numpy as np
 from odp.Grid import Grid
 from odp.Shapes import ShapeRectangle
 
-from odp.dynamics import DubinsCar
+from odp.dynamics import DubinsCar, DubinsCar2
 
 from odp.Plots import PlotOptions
 from odp.Plots import visualize_plots
@@ -55,16 +55,16 @@ tau = np.arange(start=0, stop=Lookback_length + small_number, step=t_step)
 
 # Step 4: System dynamics for computation
 # uMode set to min for reaching the target, trying to minimize the value function
-car = DubinsCar(uMode="min", dMode="max")  # Define system
+car = DubinsCar2(uMode="min", dMode="max")  # Define system
 
 # Step 5: Call HJSolver function
 compMethod = {"TargetSetMode": "minVOverTime"}
 result = HJSolver(car, g, Initial_value_f, tau, compMethod, saveAllTimeSteps=True)
 
 # Visualization of 3D value function
-po = PlotOptions(do_plot=True, plot_type="set", plotDims=[0,1,2], slicesCut=[50],colorscale="Bluered", 
-                 save_fig=True, filename="plots/3D_0_sublevel_set", interactive_html=True)
-visualize_plots(result, g, po)
+# po = PlotOptions(do_plot=True, plot_type="set", plotDims=[0,1,2], slicesCut=[50],colorscale="Bluered", 
+#                  save_fig=True, filename="plots/3D_0_sublevel_set", interactive_html=True)
+# visualize_plots(result, g, po)
 
 # Step 6: Compute spatial derivatives of the value function
 
@@ -90,14 +90,14 @@ while not goal_reached(position):
         # print(f"The shape of the input value function v of attacker is {v.shape}. \n")
         spat_deriv_vector = spa_deriv(g.get_indices(position), v, g)      
 
-        optimal_controls.append(car.optCtrl_inPython(spat_deriv_vector))
+        optimal_controls.append(car.optCtrl_inPython(position, spat_deriv_vector))
 
         # update the position of the agent using the dynamics
-        position = car.forward(ctrl_freq=1/t_step, current_state=position, u=optimal_controls[-1])
+        position = car.forward(ctrl_freq=1/t_step, current_state=position, control=optimal_controls[-1])
 
 
 # Step 7: Export optimal control values to a file
 with open('dubins_control.txt', "w") as f:
         for control in optimal_controls:
-                f.write(f"{float(control)}\n")
+                f.write(f"{tuple(control)}\n")
 
