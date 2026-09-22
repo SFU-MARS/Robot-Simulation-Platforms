@@ -159,9 +159,11 @@ def main():
         print(msg)
         while (1):
             
-            # Get value from HJ results
-            target_linear_velocity = hj_results.linear.x
-            target_angular_velocity = hj_results.angular.z
+            # TODO: Get value from HJ results
+            # TODO: Put a timer to match computation time step
+            # Send angular velocities and linear velocities to the robot
+            # target_linear_velocity = hj_results.linear.x
+            # target_angular_velocity = hj_results.angular.z
 
             if status == 20:
                 print(msg)
