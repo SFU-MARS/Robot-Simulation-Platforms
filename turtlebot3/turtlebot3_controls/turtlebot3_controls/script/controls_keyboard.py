@@ -142,7 +142,7 @@ def publish_command(pub, linear_vel=0.0, angular_vel=0.0):
     pub.publish(twist)
 
 def update_robot(pub):
-    linear_vel = 1.0
+    linear_vel = 10.0
     angular_vel = 0.0
     publish_command(pub, linear_vel=linear_vel, angular_vel=angular_vel)
     
