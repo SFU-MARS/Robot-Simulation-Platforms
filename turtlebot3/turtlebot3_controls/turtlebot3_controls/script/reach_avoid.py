@@ -3,9 +3,9 @@ from turtle import position
 import numpy as np
 
 from odp.Grid import Grid
-from odp.Shapes import ShapeRectangle
+from odp.Shapes import ShapeRectangle, Union
 
-from odp.dynamics import DubinsCar, DubinsCar2
+from odp.dynamics import DubinsCar
 
 from odp.Plots import PlotOptions
 from odp.Plots import visualize_plots
@@ -31,20 +31,12 @@ g = Grid(grid_min, grid_max, dims, N, pd)
 # Step 2: Generate initial values for grid using shape functions
 goal_min = [0.6, 0.1, -np.pi]
 goal_max = [0.8, 0.3, np.pi]
-Initial_value_f = ShapeRectangle(g, goal_min, goal_max)
+goal = ShapeRectangle(g, goal_min, goal_max)
 
-# TODO: Figure out how to include obstacles.
-# obstacle = ShapeRectangle(
-#         g,
-#         [-0.1, 0.3, -math.pi], 
-#         [0.1, 0.6, math.pi]
-# )
+# TODO: Compute and simulate with obstacles
+obstacles  = ShapeRectangle(g, [-0.1, 0.3, -math.pi], [0.1, 0.6, math.pi])
+obstacles  = Union(obstacles, ShapeRectangle( g, [-0.1, -1.0, -math.pi], [0.1, -0.3, math.pi]))
 
-# obstacle = ShapeRectangle(
-#         g,
-#         [-0.1, -1.0, -math.pi], 
-#         [0.1, -0.3, math.pi]
-# )
 
 # Step 3: Time length for computations
 Lookback_length = 1.0
@@ -55,19 +47,19 @@ tau = np.arange(start=0, stop=Lookback_length + small_number, step=t_step)
 
 # Step 4: System dynamics for computation
 # uMode set to min for reaching the target, trying to minimize the value function
-car = DubinsCar2(uMode="min", dMode="max")  # Define system
+# Stick to DubinsCar 1D and use constant velocity
+car = DubinsCar(uMode="min", dMode="max")  # Define system
 
 # Step 5: Call HJSolver function
 compMethod = {"TargetSetMode": "minVOverTime"}
-result = HJSolver(car, g, Initial_value_f, tau, compMethod, saveAllTimeSteps=True)
+result = HJSolver(car, g, goal,tau, compMethod, saveAllTimeSteps=True)
 
 # Visualization of 3D value function
-# po = PlotOptions(do_plot=True, plot_type="set", plotDims=[0,1,2], slicesCut=[50],colorscale="Bluered", 
-#                  save_fig=True, filename="plots/3D_0_sublevel_set", interactive_html=True)
-# visualize_plots(result, g, po)
+po = PlotOptions(do_plot=True, plot_type="set", plotDims=[0,1,2], slicesCut=[50],colorscale="Bluered", 
+                 save_fig=False, filename="plots/3D_0_sublevel_set.png", interactive_html=True)
+visualize_plots(result, g, po)
 
 # Step 6: Compute spatial derivatives of the value function
-
 position = np.array([0.0, 0.0, 0.0])  # Initial position of the agent
 
 def goal_reached(position):
@@ -90,14 +82,13 @@ while not goal_reached(position):
         # print(f"The shape of the input value function v of attacker is {v.shape}. \n")
         spat_deriv_vector = spa_deriv(g.get_indices(position), v, g)      
 
-        optimal_controls.append(car.optCtrl_inPython(position, spat_deriv_vector))
+        optimal_controls.append(car.optCtrl_inPython(spat_deriv_vector))
 
         # update the position of the agent using the dynamics
-        position = car.forward(ctrl_freq=1/t_step, current_state=position, control=optimal_controls[-1])
+        position = car.forward(ctrl_freq=1/t_step, current_state=position, u=optimal_controls[-1])
 
 
 # Step 7: Export optimal control values to a file
 with open('dubins_control.txt', "w") as f:
         for control in optimal_controls:
-                f.write(f"{tuple(control)}\n")
-
+                f.write(f"{control}\n")
