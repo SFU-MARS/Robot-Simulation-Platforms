@@ -79,19 +79,6 @@ Communications Failed
 """
 
 
-def get_key(settings):
-    if os.name == 'nt':
-        return msvcrt.getch().decode('utf-8')
-    tty.setraw(sys.stdin.fileno())
-    rlist, _, _ = select.select([sys.stdin], [], [], 0.1)
-    if rlist:
-        key = sys.stdin.read(1)
-    else:
-        key = ''
-
-    termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
-    return key
-
 
 def print_vels(target_linear_velocity, target_angular_velocity):
     print('currently:\tlinear velocity {0}\t angular velocity {1} '.format(
@@ -134,6 +121,31 @@ def check_angular_limit_velocity(velocity):
     else:
         return constrain(velocity, -WAFFLE_MAX_ANG_VEL, WAFFLE_MAX_ANG_VEL)
 
+def publish_command(pub, linear_vel=0.0, angular_vel=0.0):
+    # TODO: Get value from HJ results
+    # TODO: Put a timer to match computation time step
+    # Send angular velocities and linear velocities to the robot
+    # target_linear_velocity = hj_results.linear.x
+    # target_angular_velocity = hj_results.angular.z
+    control_linear_velocity = linear_vel
+    control_angular_velocity = angular_vel
+    twist = Twist()
+    twist.linear.x = control_linear_velocity
+    twist.linear.y = 0.0
+    twist.linear.z = 0.0
+
+    twist.angular.x = 0.0
+    twist.angular.y = 0.0
+    twist.angular.z = control_angular_velocity
+
+    print("Publishing command: linear velocity = {}, angular velocity = {}".format(control_linear_velocity, control_angular_velocity))
+    pub.publish(twist)
+
+def update_robot(pub):
+    linear_vel = 1.0
+    angular_vel = 0.0
+    publish_command(pub, linear_vel=linear_vel, angular_vel=angular_vel)
+    
 
 def main():
     settings = None
@@ -144,93 +156,30 @@ def main():
     ROS_DISTRO = os.environ.get('ROS_DISTRO')
     qos = QoSProfile(depth=10)
     node = rclpy.create_node('teleop_keyboard')
-    if ROS_DISTRO == 'humble':
-        pub = node.create_publisher(Twist, 'cmd_vel', qos)
-    else:
-        pub = node.create_publisher(TwistStamped, 'cmd_vel', qos)
+    pub = node.create_publisher(Twist, 'cmd_vel', qos)
+    publish_command(pub, 0.0, 0.0)  # Send a final command to stop the robot
 
-    status = 0
-    target_linear_velocity = 0.0
-    target_angular_velocity = 0.0
-    control_linear_velocity = 0.0
-    control_angular_velocity = 0.0
 
-    try:
-        print(msg)
-        while (1):
-            
-            # TODO: Get value from HJ results
-            # TODO: Put a timer to match computation time step
-            # Send angular velocities and linear velocities to the robot
-            # target_linear_velocity = hj_results.linear.x
-            # target_angular_velocity = hj_results.angular.z
+    # Read optimal control values from a file 
+    with open('turtlebot3_controls/turtlebot3_controls/script/dubins_control.txt', 'r') as f:
+        lines = f.readlines()
+        optimal_controls = [tuple(map(float, line.strip().split(','))) for line in lines]
 
-            if status == 20:
-                print(msg)
-                status = 0
+    if os.name != 'nt':
+        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
 
-            control_linear_velocity = make_simple_profile(
-                control_linear_velocity,
-                target_linear_velocity,
-                (LIN_VEL_STEP_SIZE / 2.0))
+        
+    timer = node.create_timer(0.1, lambda: update_robot(pub))  # Create a timer to keep the node aliv
+    print("Starting the control loop. Press Ctrl+C to exit.")
+    
+    try: 
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        publish_command(pub, 0.0, 0.0)  # Send a final command to stop the robot
+        exit(1)
 
-            control_angular_velocity = make_simple_profile(
-                control_angular_velocity,
-                target_angular_velocity,
-                (ANG_VEL_STEP_SIZE / 2.0))
 
-            if ROS_DISTRO == 'humble':
-                twist = Twist()
-                twist.linear.x = control_linear_velocity
-                twist.linear.y = 0.0
-                twist.linear.z = 0.0
-
-                twist.angular.x = 0.0
-                twist.angular.y = 0.0
-                twist.angular.z = control_angular_velocity
-
-                pub.publish(twist)
-            else:
-                twist_stamped = TwistStamped()
-                twist_stamped.header.stamp = Clock().now().to_msg()
-                twist_stamped.header.frame_id = ''
-                twist_stamped.twist.linear.x = control_linear_velocity
-                twist_stamped.twist.linear.y = 0.0
-                twist_stamped.twist.linear.z = 0.0
-
-                twist_stamped.twist.angular.x = 0.0
-                twist_stamped.twist.angular.y = 0.0
-                twist_stamped.twist.angular.z = control_angular_velocity
-
-                pub.publish(twist_stamped)
-
-    except Exception as e:
-        print(e)
-
-    finally:
-        if ROS_DISTRO == 'humble':
-            twist = Twist()
-            twist.linear.x = 0.0
-            twist.linear.y = 0.0
-            twist.linear.z = 0.0
-            twist.angular.x = 0.0
-            twist.angular.y = 0.0
-            twist.angular.z = 0.0
-            pub.publish(twist)
-        else:
-            twist_stamped = TwistStamped()
-            twist_stamped.header.stamp = Clock().now().to_msg()
-            twist_stamped.header.frame_id = ''
-            twist_stamped.twist.linear.x = control_linear_velocity
-            twist_stamped.twist.linear.y = 0.0
-            twist_stamped.twist.linear.z = 0.0
-            twist_stamped.twist.angular.x = 0.0
-            twist_stamped.twist.angular.y = 0.0
-            twist_stamped.twist.angular.z = control_angular_velocity
-            pub.publish(twist_stamped)
-
-        if os.name != 'nt':
-            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
+ 
 
 
 if __name__ == '__main__':
