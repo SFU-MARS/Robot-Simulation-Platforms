@@ -28,8 +28,8 @@ Follow setup instructions here: https://docs.robotis.com/docs/systems/turtlebot3
 cd turtlebot3
 colcon build
 source install/setup.bash
-export TURTLEBOT3_MODEL=waffle
-ros2 launch turtlebot3_gazebo baseline_fastbrt.launch.py
+export TURTLEBOT3_MODEL=burger
+ros2 launch turtlebot3_gazebo empty_world.launch.py
 ```
 ### Launch simulation
 
@@ -37,19 +37,30 @@ We are following the basic example from https://docs.robotis.com/docs/systems/tu
 
 
 ```
-export TURTLEBOT3_MODEL=waffle
-ros2 launch turtlebot3_gazebo turtlebot3_world.launch.py
+export TURTLEBOT3_MODEL=burger
+ros2 launch turtlebot3_gazebo empty_world.launch.py
 ```
 
 Controlling the turtlebot can be done through this script: `turtlebot3/turtlebot3_controls/turtlebot3_controls/script/controls_keyboard.py`
 
 ```
 cd turtlebot3
-export TURTLEBOT3_MODEL=waffle
+export TURTLEBOT3_MODEL=burger
 colcon build --packages-select turtlebot3_controls
 source install/setup.bash
 ros2 run turtlebot3_controls controls_keyboard
 ```
+
+In `turtlebot3/turtlebot3_simulations/turtlebot3_gazebo/params/turtlebot3_waffle_bridge.yaml` (or burger equivalent), change `TwistStamped` to `Twist`
+```
+- ros_topic_name: "cmd_vel"
+  gz_topic_name: "cmd_vel"
+  ros_type_name: "geometry_msgs/msg/TwistStamped"
+  gz_type_name: "gz.msgs.Twist"
+  direction: ROS_TO_GZ
+```
+
+
 
 ## Mujoco Python simulator
 
