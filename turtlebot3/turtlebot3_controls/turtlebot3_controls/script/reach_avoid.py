@@ -52,7 +52,7 @@ car = DubinsCar(uMode="min", dMode="max")  # Define system
 
 # Step 5: Call HJSolver function
 compMethod = {"TargetSetMode": "minVOverTime"}
-result = HJSolver(car, g, goal,tau, compMethod, saveAllTimeSteps=True)
+result = HJSolver(car, g, [goal, obstacles], tau, compMethod, saveAllTimeSteps=True)
 
 # Visualization of 3D value function
 po = PlotOptions(do_plot=True, plot_type="set", plotDims=[0,1,2], slicesCut=[50],colorscale="Bluered", 
