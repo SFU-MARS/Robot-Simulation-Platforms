@@ -122,8 +122,6 @@ def check_angular_limit_velocity(velocity):
         return constrain(velocity, -WAFFLE_MAX_ANG_VEL, WAFFLE_MAX_ANG_VEL)
 
 def publish_command(pub, linear_vel=0.0, angular_vel=0.0):
-    # TODO: Get value from HJ results
-    # TODO: Put a timer to match computation time step
     # Send angular velocities and linear velocities to the robot
     # target_linear_velocity = hj_results.linear.x
     # target_angular_velocity = hj_results.angular.z
@@ -141,11 +139,16 @@ def publish_command(pub, linear_vel=0.0, angular_vel=0.0):
     print("Publishing command: linear velocity = {}, angular velocity = {}".format(control_linear_velocity, control_angular_velocity))
     pub.publish(twist)
 
-def update_robot(pub):
-    linear_vel = 10.0
-    angular_vel = 0.0
-    publish_command(pub, linear_vel=linear_vel, angular_vel=angular_vel)
-    
+update_index = 0
+
+def update_robot(pub, optimal_controls):
+    global update_index
+    if update_index < len(optimal_controls):
+        angular_vel = optimal_controls[update_index]
+        publish_command(pub, linear_vel=1.0, angular_vel=float(angular_vel))
+        update_index += 1
+    else:
+        publish_command(pub, 0.0, 0.0)  # Send a final command to stop the robot
 
 def main():
     settings = None
@@ -169,7 +172,11 @@ def main():
         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
 
         
-    timer = node.create_timer(0.1, lambda: update_robot(pub))  # Create a timer to keep the node aliv
+    with open('turtlebot3_controls/turtlebot3_controls/script/dubins_control.txt', 'r') as f:
+        optimal_controls = list(map(float, f.readlines()))
+
+    
+    timer = node.create_timer(0.1, lambda: update_robot(pub, optimal_controls))  # Create a timer to keep the node aliv
     print("Starting the control loop. Press Ctrl+C to exit.")
     
     try: 
