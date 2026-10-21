@@ -1,0 +1,162 @@
+<?xml version="1.0"?>
+<sdf version="1.6">
+  <world name="hj_reach_target">
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+
+    <physics name="default_physics" type="ode">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1</real_time_factor>
+      <real_time_update_rate>1000</real_time_update_rate>
+    </physics>
+
+    <gravity>0 0 -9.8</gravity>
+    <scene>
+      <ambient>0.7 0.7 0.7 1</ambient>
+      <background>0.9 0.9 0.9 1</background>
+      <shadows>true</shadows>
+    </scene>
+
+    <light name="sun" type="directional">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 5 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.5 0.2 -1</direction>
+    </light>
+
+    <!-- A 2 m x 2 m floor; its top surface is at z=0. -->
+    <model name="map_floor">
+      <static>true</static>
+      <link name="floor">
+        <collision name="floor_collision">
+          <pose>0 0 -0.025 0 0 0</pose>
+          <geometry><box><size>2 2 0.05</size></box></geometry>
+        </collision>
+        <visual name="floor_visual">
+          <pose>0 0 -0.025 0 0 0</pose>
+          <geometry><box><size>2 2 0.05</size></box></geometry>
+          <material>
+            <ambient>0.82 0.82 0.82 1</ambient>
+            <diffuse>0.82 0.82 0.82 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Red perimeter walls surround the [-1, 1] x [-1, 1] map. -->
+    <model name="map_walls">
+      <static>true</static>
+      <link name="walls">
+        <collision name="north_collision">
+          <pose>0 1.025 0.2 0 0 0</pose>
+          <geometry><box><size>2.05 0.05 0.4</size></box></geometry>
+        </collision>
+        <visual name="north_visual">
+          <pose>0 1.025 0.2 0 0 0</pose>
+          <geometry><box><size>2.05 0.05 0.4</size></box></geometry>
+          <material><ambient>0.8 0.05 0.05 1</ambient><diffuse>0.8 0.05 0.05 1</diffuse></material>
+        </visual>
+        <collision name="south_collision">
+          <pose>0 -1.025 0.2 0 0 0</pose>
+          <geometry><box><size>2.05 0.05 0.4</size></box></geometry>
+        </collision>
+        <visual name="south_visual">
+          <pose>0 -1.025 0.2 0 0 0</pose>
+          <geometry><box><size>2.05 0.05 0.4</size></box></geometry>
+          <material><ambient>0.8 0.05 0.05 1</ambient><diffuse>0.8 0.05 0.05 1</diffuse></material>
+        </visual>
+        <collision name="west_collision">
+          <pose>-1.025 0 0.2 0 0 0</pose>
+          <geometry><box><size>0.05 2 0.4</size></box></geometry>
+        </collision>
+        <visual name="west_visual">
+          <pose>-1.025 0 0.2 0 0 0</pose>
+          <geometry><box><size>0.05 2 0.4</size></box></geometry>
+          <material><ambient>0.8 0.05 0.05 1</ambient><diffuse>0.8 0.05 0.05 1</diffuse></material>
+        </visual>
+        <collision name="east_collision">
+          <pose>1.025 0 0.2 0 0 0</pose>
+          <geometry><box><size>0.05 2 0.4</size></box></geometry>
+        </collision>
+        <visual name="east_visual">
+          <pose>1.025 0 0.2 0 0 0</pose>
+          <geometry><box><size>0.05 2 0.4</size></box></geometry>
+          <material><ambient>0.8 0.05 0.05 1</ambient><diffuse>0.8 0.05 0.05 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Obstacle 1: x=[-0.1, 0.3], y=[0.1, 0.6]. -->
+    <model name="obstacle_1">
+      <static>true</static>
+      <pose>0.1 0.35 0.2 0 0 0</pose>
+      <link name="body">
+        <collision name="collision">
+          <geometry><box><size>0.4 0.5 0.4</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.4 0.5 0.4</size></box></geometry>
+          <material><ambient>0.8 0.05 0.05 1</ambient><diffuse>0.8 0.05 0.05 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!--
+      Obstacle 2 was supplied with reversed endpoints: [-0.1, -1.0, 0.1, -0.3].
+      Normalize x to [-1.0, -0.1] and y to [-0.3, 0.1].
+    -->
+    <model name="obstacle_2">
+      <static>true</static>
+      <pose>-0.55 -0.1 0.2 0 0 0</pose>
+      <link name="body">
+        <collision name="collision">
+          <geometry><box><size>0.9 0.4 0.4</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.9 0.4 0.4</size></box></geometry>
+          <material><ambient>0.8 0.05 0.05 1</ambient><diffuse>0.8 0.05 0.05 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Green goal region: x=[0.6, 0.8], y=[0.1, 0.3]; visual only. -->
+    <model name="goal_region">
+      <static>true</static>
+      <pose>0.7 0.2 0.006 0 0 0</pose>
+      <link name="marker">
+        <visual name="visual">
+          <geometry><box><size>0.2 0.2 0.012</size></box></geometry>
+          <material>
+            <ambient>0.05 0.8 0.1 1</ambient>
+            <diffuse>0.05 0.8 0.1 1</diffuse>
+            <emissive>0.02 0.15 0.02 1</emissive>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Blue start marker at (-0.8, -0.8), radius 0.2; visual only. -->
+    <model name="start_marker">
+      <static>true</static>
+      <pose>-0.8 -0.8 0.006 0 0 0</pose>
+      <link name="marker">
+        <visual name="visual">
+          <geometry><cylinder><radius>0.2</radius><length>0.012</length></cylinder></geometry>
+          <material>
+            <ambient>0.05 0.15 0.9 1</ambient>
+            <diffuse>0.05 0.15 0.9 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <gui fullscreen="0">
+      <camera name="user_camera">
+        <pose>0 -0.1 3.7 0 1.5708 0</pose>
+        <view_controller>orbit</view_controller>
+      </camera>
+    </gui>
+  </world>
+</sdf>

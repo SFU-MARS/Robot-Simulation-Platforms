@@ -29,7 +29,7 @@ cd turtlebot3
 colcon build
 source install/setup.bash
 export TURTLEBOT3_MODEL=burger
-ros2 launch turtlebot3_gazebo empty_world.launch.py
+ros2 launch turtlebot3_gazebo empty_world.launch.py world:=turtlebot3_controls/hj_reach_target.world x_pose:=-0.8 y_pose:=-0.8
 ```
 ### Launch simulation
 
@@ -38,7 +38,7 @@ We are following the basic example from https://docs.robotis.com/docs/systems/tu
 
 ```
 export TURTLEBOT3_MODEL=burger
-ros2 launch turtlebot3_gazebo empty_world.launch.py
+ros2 launch turtlebot3_gazebo empty_world.launch.py world:=turtlebot3_controls/hj_reach_target.world x_pose:=-0.8 y_pose:=-0.8
 ```
 
 Controlling the turtlebot can be done through this script: `turtlebot3/turtlebot3_controls/turtlebot3_controls/script/controls_keyboard.py`
@@ -68,3 +68,13 @@ In `turtlebot3/turtlebot3_simulations/turtlebot3_gazebo/params/turtlebot3_waffle
 
 
 
+### Notes:
+
+Try to put goals and obstacles in gazebo 
+
+visualizing the robot: https://github.com/SFU-MARS/hunavis
+https://github.com/SFU-MARS/hunavis/blob/4157b38ae16f57474ba00917867685260f322260/hunavis/people_visualizer.py#L15-L22
+rviz 2D top down view to do the simulation instead
+
+Talk to Yujin about the problems with the computer 
+Read control message, convert to "arrow" message to rviz
