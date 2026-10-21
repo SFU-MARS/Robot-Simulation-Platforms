@@ -64,17 +64,3 @@ In `turtlebot3/turtlebot3_simulations/turtlebot3_gazebo/params/turtlebot3_waffle
 
 ## Mujoco Python simulator
 
-
-
-
-
-### Notes:
-
-Try to put goals and obstacles in gazebo 
-
-visualizing the robot: https://github.com/SFU-MARS/hunavis
-https://github.com/SFU-MARS/hunavis/blob/4157b38ae16f57474ba00917867685260f322260/hunavis/people_visualizer.py#L15-L22
-rviz 2D top down view to do the simulation instead
-
-Talk to Yujin about the problems with the computer 
-Read control message, convert to "arrow" message to rviz
