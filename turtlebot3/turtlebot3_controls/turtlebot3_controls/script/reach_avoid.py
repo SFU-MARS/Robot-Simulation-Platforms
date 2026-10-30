@@ -39,7 +39,7 @@ obstacles  = Union(obstacles, ShapeRectangle( g, [-1.0, -0.3, -math.pi], [-0.1, 
 
 
 # Step 3: Time length for computations
-Lookback_length = 3.0
+Lookback_length = 1.0
 t_step = 0.1
 
 small_number = 1e-5
@@ -63,11 +63,16 @@ visualize_plots(result, g, po)
 position = np.array([-0.8, -0.8, 0.2])  # Initial position of the agent
 
 def goal_reached(position):
-        return (goal_min[0] <= position[0] <= goal_max[0]) and (goal_min[1] <= position[1] <= goal_max[1]) 
+        # TODO: Undershoots due to comparison of float and ints
+        # TODO: Overshoots if we are stricter on the position check, e.g. if we use int(position) instead of position
+        # Then we can't go back to the goal in time
+        return (goal_min[0] < int(position[0]) < goal_max[0]) and (goal_min[1] < int(position[1]) < goal_max[1]) 
         
 
 optimal_controls = []
 while not goal_reached(position):
+
+        print(position)
 
         neg2pos, pos2neg = find_sign_change(g, result, position, tau)
         assert result.shape[-1] == len(tau)  # check the shape of value function
