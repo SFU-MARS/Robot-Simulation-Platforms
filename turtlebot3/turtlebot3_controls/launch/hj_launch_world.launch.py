@@ -20,6 +20,7 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
     x_pose = LaunchConfiguration('x_pose')
     y_pose = LaunchConfiguration('y_pose')
+    yaw_pose = LaunchConfiguration('yaw_pose')
     world = LaunchConfiguration('world')
 
     gz_launch = os.path.join(ros_gz_sim_share, 'launch', 'gz_sim.launch.py')
@@ -43,6 +44,11 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument('x_pose', default_value='-0.8'),
         DeclareLaunchArgument('y_pose', default_value='-0.8'),
+        DeclareLaunchArgument(
+            'yaw_pose',
+            default_value='0.0',
+            description='Initial robot heading in radians',
+        ),
         DeclareLaunchArgument('use_sim_time', default_value='true'),
         set_model_path,
         IncludeLaunchDescription(
@@ -70,6 +76,7 @@ def generate_launch_description():
                 '-file', robot_sdf,
                 '-x', x_pose,
                 '-y', y_pose,
+                '-Y', yaw_pose,
                 '-z', '0.01',
             ],
             output='screen',

@@ -103,10 +103,7 @@
       </link>
     </model>
 
-    <!--
-      Obstacle 2 was supplied with reversed endpoints: [-0.1, -1.0, 0.1, -0.3].
-      Normalize x to [-1.0, -0.1] and y to [-0.3, 0.1].
-    -->
+    <!-- Obstacle 2: x=[-1.0, -0.1], y=[-0.3, 0.1]. -->
     <model name="obstacle_2">
       <static>true</static>
       <pose>-0.55 -0.1 0.2 0 0 0</pose>

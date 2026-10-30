@@ -34,12 +34,12 @@ goal_max = [0.8, 0.3, np.pi]
 goal = ShapeRectangle(g, goal_min, goal_max)
 
 # TODO: Compute and simulate with obstacles
-obstacles  = ShapeRectangle(g, [-0.1, 0.3, -math.pi], [0.1, 0.6, math.pi])
-obstacles  = Union(obstacles, ShapeRectangle( g, [-0.1, -1.0, -math.pi], [0.1, -0.3, math.pi]))
+obstacles  = ShapeRectangle(g, [-0.1, 0.1, -math.pi], [0.3, 0.6, math.pi])
+obstacles  = Union(obstacles, ShapeRectangle( g, [-1.0, -0.3, -math.pi], [-0.1, 0.1, math.pi]))
 
 
 # Step 3: Time length for computations
-Lookback_length = 1.0
+Lookback_length = 3.0
 t_step = 0.1
 
 small_number = 1e-5
@@ -60,7 +60,7 @@ po = PlotOptions(do_plot=True, plot_type="set", plotDims=[0,1,2], slicesCut=[50]
 visualize_plots(result, g, po)
 
 # Step 6: Compute spatial derivatives of the value function
-position = np.array([0.0, 0.0, 0.0])  # Initial position of the agent
+position = np.array([-0.8, -0.8, 0.2])  # Initial position of the agent
 
 def goal_reached(position):
         return (goal_min[0] <= position[0] <= goal_max[0]) and (goal_min[1] <= position[1] <= goal_max[1]) 

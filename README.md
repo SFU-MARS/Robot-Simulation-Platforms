@@ -29,7 +29,7 @@ cd turtlebot3
 colcon build --packages-select turtlebot3_controls
 source install/setup.bash
 export TURTLEBOT3_MODEL=burger
-ros2 launch turtlebot3_controls hj_launch_world.launch.py world:=turtlebot3_controls/hj_reach_target.world x_pose:=-0.8 y_pose:=-0.8
+ros2 launch turtlebot3_controls hj_launch_world.launch.py world:=turtlebot3_controls/hj_reach_target.world x_pose:=-0.8 y_pose:=-0.8 yaw_pose:=0.2
 
 ```
 ### Launch simulation
@@ -39,7 +39,7 @@ We are following the basic example from https://docs.robotis.com/docs/systems/tu
 
 ```
 export TURTLEBOT3_MODEL=burger
-ros2 launch turtlebot3_controls hj_launch_world.launch.py world:=turtlebot3_controls/hj_reach_target.world x_pose:=-0.8 y_pose:=-0.8
+ros2 launch turtlebot3_controls hj_launch_world.launch.py world:=turtlebot3_controls/hj_reach_target.world x_pose:=-0.8 y_pose:=-0.8 yaw_pose:=0.2
 
 ```
 
