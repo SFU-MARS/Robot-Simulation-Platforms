@@ -52,3 +52,12 @@ colcon build --packages-select turtlebot3_controls
 source install/setup.bash
 ros2 run turtlebot3_controls controls_keyboard
 ```
+
+In `turtlebot3/turtlebot3_simulations/turtlebot3_gazebo/params/turtlebot3_waffle_bridge.yaml` (or burger equivalent), change `TwistStamped` to `Twist`
+```
+- ros_topic_name: "cmd_vel"
+  gz_topic_name: "cmd_vel"
+  ros_type_name: "geometry_msgs/msg/TwistStamped"
+  gz_type_name: "gz.msgs.Twist"
+  direction: ROS_TO_GZ
+```
