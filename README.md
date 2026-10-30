@@ -61,3 +61,12 @@ In `turtlebot3/turtlebot3_simulations/turtlebot3_gazebo/params/turtlebot3_waffle
   gz_type_name: "gz.msgs.Twist"
   direction: ROS_TO_GZ
 ```
+
+### Troubleshooting
+
+Sometimes if the simulation has been run a handful of times in one sitting, old gazebo runs may be hiding in the background. Ensure all of these are gone by running these commands
+
+```
+pkill -f gazebo
+pkill -f ros
+```

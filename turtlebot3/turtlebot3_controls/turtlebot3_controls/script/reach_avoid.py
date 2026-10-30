@@ -65,6 +65,7 @@ position = np.array([-0.8, -0.8, 0.2])  # Initial position of the agent
 def goal_reached(position):
         # TODO: Undershoots due to comparison of float and ints
         # TODO: Overshoots if we are stricter on the position check, e.g. if we use int(position) instead of position
+        # Goal may be to small relative to the speed/time step?
         # Then we can't go back to the goal in time
         return (goal_min[0] < int(position[0]) < goal_max[0]) and (goal_min[1] < int(position[1]) < goal_max[1]) 
         
