@@ -39,7 +39,7 @@ obstacles  = Union(obstacles, ShapeRectangle( g, [-1.0, -0.3, -math.pi], [-0.1, 
 
 
 # Step 3: Time length for computations
-Lookback_length = 1.0
+Lookback_length = 5.0
 t_step = 0.1
 
 small_number = 1e-5
@@ -48,7 +48,7 @@ tau = np.arange(start=0, stop=Lookback_length + small_number, step=t_step)
 # Step 4: System dynamics for computation
 # uMode set to min for reaching the target, trying to minimize the value function
 # Stick to DubinsCar 1D and use constant velocity
-car = DubinsCar(uMode="min", dMode="max")  # Define system
+car = DubinsCar(uMode="min", dMode="max", speed=0.5)  # Define system
 
 # Step 5: Call HJSolver function
 compMethod = {"TargetSetMode": "minVOverTime"}
@@ -67,7 +67,7 @@ def goal_reached(position):
         # TODO: Overshoots if we are stricter on the position check, e.g. if we use int(position) instead of position
         # Goal may be to small relative to the speed/time step?
         # Then we can't go back to the goal in time
-        return (goal_min[0] < int(position[0]) < goal_max[0]) and (goal_min[1] < int(position[1]) < goal_max[1]) 
+        return (goal_min[0] < position[0] < goal_max[0]) and (goal_min[1] < position[1] < goal_max[1]) 
         
 
 optimal_controls = []
@@ -93,8 +93,11 @@ while not goal_reached(position):
         # TODO: Check how the position is being updated, and if the optimal control is being applied correctly
         # Use ros2 topic echo to see if the control is being published correctly to the robot 
         # update the position of the agent using the dynamics
-        position = car.forward(ctrl_freq=1/t_step, current_state=position, u=optimal_controls[-1])
+        position = car.forward(ctrl_freq=1/0.05, current_state=position, u=optimal_controls[-1])
 
+# NOTE:
+# Mess with frequency, velocity and time horizon to see how the robot behaves in simulation and in real life
+# Do experiments to see how the robot behaves in simulation and in real life
 
 # Step 7: Export optimal control values to a file
 with open('dubins_control.txt', "w") as f:
