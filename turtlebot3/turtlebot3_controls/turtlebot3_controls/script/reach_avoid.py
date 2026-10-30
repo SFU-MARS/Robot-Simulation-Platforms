@@ -84,6 +84,8 @@ while not goal_reached(position):
 
         optimal_controls.append(car.optCtrl_inPython(spat_deriv_vector))
 
+        # TODO: Check how the position is being updated, and if the optimal control is being applied correctly
+        # Use ros2 topic echo to see if the control is being published correctly to the robot 
         # update the position of the agent using the dynamics
         position = car.forward(ctrl_freq=1/t_step, current_state=position, u=optimal_controls[-1])
 
