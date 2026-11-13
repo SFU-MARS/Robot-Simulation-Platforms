@@ -33,7 +33,9 @@
 
 import os
 import select
+import json
 import sys
+from rclpy.node import Node
 
 from geometry_msgs.msg import Twist
 from geometry_msgs.msg import TwistStamped
@@ -128,7 +130,7 @@ def publish_command(pub, linear_vel=0.0, angular_vel=0.0):
     control_linear_velocity = linear_vel
     control_angular_velocity = angular_vel
     twist = Twist()
-    twist.linear.x = control_linear_velocity
+    twist.linear.x = control_linear_velocity 
     twist.linear.y = 0.0
     twist.linear.z = 0.0
 
@@ -141,14 +143,57 @@ def publish_command(pub, linear_vel=0.0, angular_vel=0.0):
 
 update_index = 0
 
-def update_robot(pub, optimal_controls):
-    global update_index
-    if update_index < len(optimal_controls):
-        angular_vel = optimal_controls[update_index]
-        publish_command(pub, linear_vel=1.0, angular_vel=float(angular_vel))
-        update_index += 1
-    else:
-        publish_command(pub, 0.0, 0.0)  # Send a final command to stop the robot
+class TimerController(Node):
+    def __init__(self):
+        super().__init__('controller_node')
+       
+        qos = QoSProfile(depth=10)
+        pub = self.create_publisher(Twist, 'cmd_vel', qos)
+        print(os.getcwd())
+        with open('turtlebot3_controls/turtlebot3_controls/script/dubins_control.txt', 'r') as f:
+            optimal_controls = list(map(float, f.readlines()))
+
+        with open('turtlebot3_controls/turtlebot3_controls/script/robot_config.json', 'r') as f:
+            config = json.load(f)
+            velocity = config["velocity"]
+            t_step = config["t_step"]
+
+        self.pub = pub
+        self.optimal_controls = optimal_controls
+        self.velocity = velocity
+        self.update_index = 0
+
+        self.timer = self.create_timer(
+            t_step,
+            self.update_robot
+        )
+
+    def update_robot(self):
+        print(self.update_index, len(self.optimal_controls))
+        if self.update_index < len(self.optimal_controls):
+            angular_vel = self.optimal_controls[self.update_index]
+            publish_command(self.pub, linear_vel=self.velocity, angular_vel=float(angular_vel))
+            self.update_index += 1
+        elif self.update_index < len(self.optimal_controls):
+            pass
+        else:
+            print("DONE")
+            publish_command(self.pub, 0.0, 0.0)  # Send a final command to stop the robot
+            exit(0)
+            self.timer.cancel()
+            rclpy.shutdown()  # Wake spin() and let main() clean up the node
+
+# def update_robot(pub, optimal_controls, velocity):
+#     global update_index
+#     if update_index < len(optimal_controls):
+#         angular_vel = optimal_controls[update_index]
+#         publish_command(pub, linear_vel=velocity, angular_vel=float(angular_vel))
+#         update_index += 1
+#     else:
+#         publish_command(pub, 0.0, 0.0)  # Send a final command to stop the robot
+#         self.timer.cancel()  # Stop the timer
+#         rclpy.shutdown()     # Unblock spin and signal shutdown
+
 
 def main():
     settings = None
@@ -156,34 +201,22 @@ def main():
         settings = termios.tcgetattr(sys.stdin)
 
     rclpy.init()
-    ROS_DISTRO = os.environ.get('ROS_DISTRO')
-    qos = QoSProfile(depth=10)
-    node = rclpy.create_node('teleop_keyboard')
-    pub = node.create_publisher(Twist, 'cmd_vel', qos)
-    publish_command(pub, 0.0, 0.0)  # Send a final command to stop the robot
-
-
-    # Read optimal control values from a file 
-    with open('turtlebot3_controls/turtlebot3_controls/script/dubins_control.txt', 'r') as f:
-        lines = f.readlines()
-        optimal_controls = [tuple(map(float, line.strip().split(','))) for line in lines]
+    node = TimerController()
 
     if os.name != 'nt':
         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, settings)
 
-        
-    with open('turtlebot3_controls/turtlebot3_controls/script/dubins_control.txt', 'r') as f:
-        optimal_controls = list(map(float, f.readlines()))
-
-    
-    timer = node.create_timer(0.1, lambda: update_robot(pub, optimal_controls))  # Create a timer to keep the node aliv
     print("Starting the control loop. Press Ctrl+C to exit.")
     
     try: 
         rclpy.spin(node)
     except KeyboardInterrupt:
-        publish_command(pub, 0.0, 0.0)  # Send a final command to stop the robot
-        exit(1)
+        print('Main thread interrupted.')
+    finally:
+        if rclpy.ok():
+            rclpy.shutdown()
+        node.destroy_node()
+        
 
 
  

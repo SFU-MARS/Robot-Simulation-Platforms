@@ -1,0 +1,5 @@
+{
+    "velocity": 0.78,
+    "lookback_length": 5.0,
+    "t_step": 0.1
+}

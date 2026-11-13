@@ -1,5 +1,6 @@
 import imp
 from turtle import position
+import sys
 import numpy as np
 
 from odp.Grid import Grid
@@ -16,90 +17,128 @@ from odp.compute_trajectory import find_sign_change, compute_opt_traj, spa_deriv
 
 import math
 import os
-
-if os.path.exists("plots") == False:
-    os.mkdir("plots")
-    
-# Step 1: Define grid
-grid_min = np.array([-1.0, -1.0, -np.pi])
-grid_max = np.array([1.0, 1.0, np.pi])
-dims = 3
-N = np.array([40, 40, 40])
-pd = [2]
-g = Grid(grid_min, grid_max, dims, N, pd)
-
-# Step 2: Generate initial values for grid using shape functions
-goal_min = [0.6, 0.1, -np.pi]
-goal_max = [0.8, 0.3, np.pi]
-goal = ShapeRectangle(g, goal_min, goal_max)
-
-# TODO: Compute and simulate with obstacles
-obstacles  = ShapeRectangle(g, [-0.1, 0.1, -math.pi], [0.3, 0.6, math.pi])
-obstacles  = Union(obstacles, ShapeRectangle( g, [-1.0, -0.3, -math.pi], [-0.1, 0.1, math.pi]))
+import json
 
 
-# Step 3: Time length for computations
-Lookback_length = 5.0
-t_step = 0.1
-
-small_number = 1e-5
-tau = np.arange(start=0, stop=Lookback_length + small_number, step=t_step)
-
-# Step 4: System dynamics for computation
-# uMode set to min for reaching the target, trying to minimize the value function
-# Stick to DubinsCar 1D and use constant velocity
-car = DubinsCar(uMode="min", dMode="max", speed=0.5)  # Define system
-
-# Step 5: Call HJSolver function
-compMethod = {"TargetSetMode": "minVOverTime"}
-result = HJSolver(car, g, [goal, obstacles], tau, compMethod, saveAllTimeSteps=True)
-
-# Visualization of 3D value function
-po = PlotOptions(do_plot=True, plot_type="set", plotDims=[0,1,2], slicesCut=[50],colorscale="Bluered", 
-                 save_fig=False, filename="plots/3D_0_sublevel_set.png", interactive_html=True)
-visualize_plots(result, g, po)
-
-# Step 6: Compute spatial derivatives of the value function
-position = np.array([-0.8, -0.8, 0.2])  # Initial position of the agent
-
-def goal_reached(position):
-        # TODO: Undershoots due to comparison of float and ints
-        # TODO: Overshoots if we are stricter on the position check, e.g. if we use int(position) instead of position
-        # Goal may be to small relative to the speed/time step?
-        # Then we can't go back to the goal in time
-        return (goal_min[0] < position[0] < goal_max[0]) and (goal_min[1] < position[1] < goal_max[1]) 
+def hj_reach_avoid(velocity: float = None, lookback_length: float = None, t_step: float = None):
+        if os.path.exists("plots") == False:
+                os.mkdir("plots")
         
+        # Step 1: Define grid
+        grid_min = np.array([-1.0, -1.0, -np.pi])
+        grid_max = np.array([1.0, 1.0, np.pi])
+        dims = 3
+        N = np.array([40, 40, 40])
+        pd = [2]
+        g = Grid(grid_min, grid_max, dims, N, pd)
 
-optimal_controls = []
-while not goal_reached(position):
+        # Step 2: Generate initial values for grid using shape functions
+        goal_min = [0.6, 0.1, -np.pi]
+        goal_max = [0.8, 0.3, np.pi]
+        goal = ShapeRectangle(g, goal_min, goal_max)
 
-        print(position)
+        # TODO: Compute and simulate with obstacles
+        obstacles  = ShapeRectangle(g, [-0.1, 0.1, -math.pi], [0.3, 0.6, math.pi])
+        obstacles  = Union(obstacles, ShapeRectangle( g, [-1.0, -0.3, -math.pi], [-0.1, 0.1, math.pi]))
 
-        neg2pos, pos2neg = find_sign_change(g, result, position, tau)
-        assert result.shape[-1] == len(tau)  # check the shape of value function
 
-        # check the current state is in the reach-avoid set
-        current_value = g.get_values(result[..., 0], list(position))
-        if current_value > 0:
-                result = result - current_value
+        # Step 3: Time length for computations
+        Lookback_length = lookback_length if lookback_length is not None else 1.0
+        t_step = t_step if t_step is not None else 0.1
+        velocity = velocity if velocity is not None else 0.5
 
-        # calculate the derivatives
-        v = result[..., neg2pos] # Minh: v = result[..., neg2pos[0]]
-        # print(f"The shape of the input value function v of attacker is {v.shape}. \n")
-        spat_deriv_vector = spa_deriv(g.get_indices(position), v, g)      
+        small_number = 1e-5
+        tau = np.arange(start=0, stop=Lookback_length + small_number, step=t_step)
 
-        optimal_controls.append(car.optCtrl_inPython(spat_deriv_vector))
+        # Step 4: System dynamics for computation
+        # uMode set to min for reaching the target, trying to minimize the value function
+        # Stick to DubinsCar 1D and use constant velocity
+        car = DubinsCar(uMode="min", dMode="max", speed=velocity)  # Define system
 
-        # TODO: Check how the position is being updated, and if the optimal control is being applied correctly
-        # Use ros2 topic echo to see if the control is being published correctly to the robot 
-        # update the position of the agent using the dynamics
-        position = car.forward(ctrl_freq=1/0.05, current_state=position, u=optimal_controls[-1])
+        # Step 5: Call HJSolver function
+        compMethod = {"TargetSetMode": "minVOverTime"}
+        result = HJSolver(car, g, [goal, obstacles], tau, compMethod, saveAllTimeSteps=True)
 
-# NOTE:
-# Mess with frequency, velocity and time horizon to see how the robot behaves in simulation and in real life
-# Do experiments to see how the robot behaves in simulation and in real life
+        # # Visualization of 3D value function
+        # po = PlotOptions(do_plot=True, plot_type="set", plotDims=[0,1,2], slicesCut=[50],colorscale="Bluered", 
+        #                  save_fig=False, filename="plots/3D_0_sublevel_set.png", interactive_html=True)
+        # visualize_plots(result, g, po)
 
-# Step 7: Export optimal control values to a file
-with open('dubins_control.txt', "w") as f:
-        for control in optimal_controls:
-                f.write(f"{control}\n")
+        # Step 6: Compute spatial derivatives of the value function
+        position = np.array([-0.8, -0.8, 0.2])  # Initial position of the agent
+
+        def goal_reached(position):
+                # TODO: Undershoots due to comparison of float and ints
+                # TODO: Overshoots if we are stricter on the position check, e.g. if we use int(position) instead of position
+                # Goal may be to small relative to the speed/time step?
+                # Then we can't go back to the goal in time
+                in_boundsx = (np.float64(goal_min[0]) < position[0] < np.float64(goal_max[0])) or np.isclose(position[0], np.float64(goal_min[0])) or np.isclose(position[0], np.float64(goal_max[0]))
+                in_boundsy = (np.float64(goal_min[1]) < position[1] < np.float64(goal_max[1])) or np.isclose(position[1], np.float64(goal_min[1])) or np.isclose(position[1], np.float64(goal_max[1]))
+
+                return in_boundsx and in_boundsy
+
+        optimal_controls = []
+        while not goal_reached(position):
+
+                neg2pos, pos2neg = find_sign_change(g, result, position, tau)
+                assert result.shape[-1] == len(tau)  # check the shape of value function
+
+                # check the current state is in the reach-avoid set
+                current_value = g.get_values(result[..., 0], list(position))
+                if current_value > 0:
+                        result = result - current_value
+
+                # calculate the derivatives
+                v = result[..., neg2pos] # Minh: v = result[..., neg2pos[0]]
+                # print(f"The shape of the input value function v of attacker is {v.shape}. \n")
+                spat_deriv_vector = spa_deriv(g.get_indices(position), v, g)      
+
+                optimal_controls.append(car.optCtrl_inPython(spat_deriv_vector))
+
+                # update the position of the agent using the dynamics
+                position = car.forward(ctrl_freq=1/t_step, current_state=position, u=optimal_controls[-1])
+
+        # NOTE:
+        # Mess with frequency, velocity and time horizon to see how the robot behaves in simulation and in real life
+        # Do experiments to see how the robot behaves in simulation and in real life
+
+        errorx = position[0] - goal_min[0]
+        errory = position[1] - goal_min[1]
+
+        # errorx = position[0] - goal_max[0]
+        # errory = position[1] - goal_max[1]
+
+        # Step 7: Export optimal control values to a file
+        with open("results.txt", "w") as f:
+                f.write(f"errorx: {errorx}, errory: {errory}")
+
+        # Step 7: Export optimal control values to a file
+        with open('dubins_control.txt', "w") as f:
+                for control in optimal_controls:
+                        f.write(f"{control}\n")
+
+        return errorx, errory
+
+if __name__ == "__main__":
+
+        with open('robot_config.json', 'r') as f:
+                config = json.load(f)
+                velocity = config["velocity"]
+                lookback_length = config["lookback_length"]
+                t_step = config["t_step"]
+        print('DONE')
+
+        hj_reach_avoid(velocity=velocity, lookback_length=lookback_length, t_step=t_step)
+
+        # ret = []
+        # start = 1.7
+        # end = 1.8
+        # step = 0.01
+        # for i in np.arange(start, end, step):
+        #         error = hj_reach_avoid(velocity=i)
+        #         dist = np.sqrt(np.sum(np.square(error)))
+        #         ret.append(dist)
+                
+
+        # best_velocity = ret.index(min(ret))*0.01 + start
+        # print(best_velocity, min(ret))

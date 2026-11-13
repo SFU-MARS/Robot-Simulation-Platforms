@@ -62,6 +62,15 @@ In `turtlebot3/turtlebot3_simulations/turtlebot3_gazebo/params/turtlebot3_waffle
   direction: ROS_TO_GZ
 ```
 
+### Reset position
+```
+ign service -s /world/hj_reach_target/set_pose \
+  --reqtype ignition.msgs.Pose \
+  --reptype ignition.msgs.Boolean \
+  --timeout 3000 \
+  --req 'name: "burger" position: {x: -0.8, y: -0.8, z: 0.01} orientation: {w: 0.9950041653, z: 0.0998334166}'
+```
+
 ### Troubleshooting
 
 Sometimes if the simulation has been run a handful of times in one sitting, old gazebo runs may be hiding in the background. Ensure all of these are gone by running these commands
