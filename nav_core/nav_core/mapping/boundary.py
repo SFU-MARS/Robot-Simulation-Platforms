@@ -21,9 +21,9 @@ import numpy as np
 from contourpy import contour_generator
 from scipy.ndimage import distance_transform_edt
 
-from .occupancy import FREE, OCCUPIED, OccupancyGrid
+from .occupancy import FREE, OCCUPIED, UNKNOWN, OccupancyGrid
 
-__all__ = ["Edge", "safe_free_mask", "boundary_edges", "simplify_polyline", "snap_corners"]
+__all__ = ["Edge", "safe_free_mask", "boundary_edges", "free_region", "simplify_polyline", "snap_corners"]
 
 
 @dataclass(frozen=True)
@@ -46,10 +46,13 @@ def _padded(grid: OccupancyGrid):
     return s, xs, ys
 
 
-def safe_free_mask(grid: OccupancyGrid, footprint_radius: float = 0.0) -> np.ndarray:
-    """Free cells farther than ``footprint_radius`` from every non-free cell (unpadded shape)."""
-    s, _, _ = _padded(grid)
-    free = s == FREE
+def safe_free_mask(grid: OccupancyGrid, footprint_radius: float = 0.0, unknown_free: bool = False) -> np.ndarray:
+    """Cells farther than ``footprint_radius`` from every blocked cell
+    (unpadded shape).  Blocked: occupied, outside the map, and -- unless
+    ``unknown_free`` -- unknown."""
+    st = grid.state()
+    free = (st == FREE) | ((st == UNKNOWN) if unknown_free else False)
+    free = np.pad(free, 1, constant_values=False)
     if footprint_radius > 0:
         free &= distance_transform_edt(free) * grid.res > footprint_radius
     return free[1:-1, 1:-1]
@@ -112,6 +115,52 @@ def snap_corners(pts: np.ndarray, closed: bool, short: float, min_turn: float = 
         if abs(ac[0] * (b - a)[1] - ac[1] * (b - a)[0]) < 0.5 * short * np.linalg.norm(ac):
             P = P[1:]
     return np.vstack([P, P[:1]]) if closed else P
+
+
+def _contains(poly: np.ndarray, p) -> bool:
+    """Even-odd point-in-polygon test (``poly`` without the repeated end vertex)."""
+    x, y = poly[:, 0], poly[:, 1]
+    x2, y2 = np.roll(x, -1), np.roll(y, -1)
+    crosses = ((y > p[1]) != (y2 > p[1])) & (p[0] < x + (p[1] - y) * (x2 - x) / np.where(y2 == y, 1e-300, y2 - y))
+    return bool(np.count_nonzero(crosses) % 2)
+
+
+def _area(poly: np.ndarray) -> float:
+    x, y = poly[:, 0], poly[:, 1]
+    return 0.5 * float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))
+
+
+def _ring(loop: np.ndarray, grid: OccupancyGrid, tol: float, ccw: bool) -> np.ndarray:
+    ring = snap_corners(simplify_polyline(np.vstack([loop, loop[:1]]), tol), True, short=2.5 * grid.res)[:-1]
+    return ring if (_area(ring) > 0) == ccw else ring[::-1]
+
+
+def free_region(grid: OccupancyGrid, xy, footprint_radius: float = 0.0, tol: "float | None" = None,
+                unknown_free: bool = False):
+    """The connected free region (shrunk by the footprint) that contains
+    ``xy``: (outer, holes), where ``outer`` is its outer boundary
+    (counter-clockwise) and ``holes`` lists the boundaries of the blocked
+    areas lying inside it (clockwise), e.g. free-standing obstacles.  Rings
+    have no repeated end vertex.  (None, []) if ``xy`` is not in the shrunk
+    free space.
+
+    ``unknown_free``: unknown cells count as free, so the region is
+    everything but the detected obstacles (grown by the footprint).  Every
+    detected obstacle, even one face of a few cells, is then enclosed by its
+    own closed ring."""
+    tol = grid.res if tol is None else tol
+    _, xs, ys = _padded(grid)
+    safe = np.pad(safe_free_mask(grid, footprint_radius, unknown_free), 1, constant_values=False)
+    loops = [ln[:-1] for ln in contour_generator(xs, ys, safe.astype(float)).lines(0.5)
+             if len(ln) > 3 and np.allclose(ln[0], ln[-1])]
+    around = [ln for ln in loops if _contains(ln, xy)]
+    if not around:
+        return None, []
+    outer = min(around, key=lambda ln: abs(_area(ln)))           # innermost loop around xy
+    inside = [ln for ln in loops if ln is not outer and not _contains(ln, xy) and _contains(outer, ln[0])]
+    # a loop nested in another one bounds a free pocket inside an obstacle, not one of our holes
+    holes = [h for h in inside if not any(o is not h and _contains(o, h[0]) for o in inside)]
+    return _ring(outer, grid, tol, ccw=True), [_ring(h, grid, tol, ccw=False) for h in holes]
 
 
 def boundary_edges(grid: OccupancyGrid, footprint_radius: float = 0.0, tol: "float | None" = None,

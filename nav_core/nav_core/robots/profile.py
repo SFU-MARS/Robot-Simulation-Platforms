@@ -29,6 +29,8 @@ class SensorSpec:
     fov: Optional[float]                 # rad
     n_rays: Optional[int]
     rate_hz: Optional[float]
+    range_min: float = 0.0               # m
+    height: Optional[float] = None       # m, scan plane above the floor
 
 
 @dataclass(frozen=True)
@@ -82,6 +84,18 @@ class RobotProfile:
             raise RuntimeError(f"robot profile {self.name!r} is a {self.status}; fill robots/{self.name}.yaml first")
         return self
 
+    def check_limits(self) -> None:
+        """Raise if the dynamics parameters exceed the robot's actuation.
+        Dubins 3D on a differential drive: the outer wheel runs at
+        v + w_max * track_width / 2, so v and w_max cannot both be at their
+        separate maxima.  Other dynamics: no check until their models define one."""
+        p = self.phys
+        if self.dynamics == "dubins3d" and "track_width" in p and "wheel_v_max" in p:
+            wheel = p["v"] + p["w_max"] * p["track_width"] / 2
+            if wheel > p["wheel_v_max"] + 1e-12:
+                raise ValueError(f"{self.name}: v + w_max * track_width / 2 = {wheel:.3f} m/s exceeds "
+                                 f"wheel_v_max = {p['wheel_v_max']} m/s")
+
 
 def load_profile(name_or_path) -> RobotProfile:
     """``name_or_path``: a robot name (robots/<name>.yaml) or a YAML path."""
@@ -90,9 +104,12 @@ def load_profile(name_or_path) -> RobotProfile:
         p = ROBOTS_DIR / f"{name_or_path}.yaml"
     d = yaml.safe_load(p.read_text())
     m = d["map"]
-    return RobotProfile(
+    profile = RobotProfile(
         name=d["name"], status=d["status"], dynamics=d["dynamics"], phys=dict(d.get("phys") or {}),
         footprint_radius=d["footprint_radius"], sensor=SensorSpec(**d["sensor"]), ctrl_dt=d["ctrl_dt"],
         map=MapSpec(origin=None if m["origin"] is None else tuple(m["origin"]),
                     size=None if m["size"] is None else tuple(m["size"]), resolution=m["resolution"]),
         world=d.get("world"), base_value=d.get("base_value"))
+    if profile.status == "ready":
+        profile.check_limits()
+    return profile

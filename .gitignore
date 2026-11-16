@@ -5,3 +5,4 @@ turtlebot3/turtlebot3_controls/turtlebot3_controls/script/trajectory.txt
 __pycache__/
 .pytest_cache/
 *.egg-info/
+nav_core/outputs/

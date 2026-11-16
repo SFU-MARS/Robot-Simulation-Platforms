@@ -56,8 +56,11 @@ Robot-Simulation-Platforms/
     pyproject.toml
     nav_core/                   # the importable package
       robots/                   #   profile loading, physical <-> model units
-      mapping/                  #   occupancy grid, boundary edges (obstacle / frontier)
+      mapping/                  #   occupancy grid, region, boundary edges, obstacle layer (faces, corners)
       nominal/                  #   nominal controllers (pursuit; MPPI planned)
+      sim/                      #   ROS-free closed loop: SDF world, synthetic LiDAR, unicycle plant
+      safety/                   #   FaST-BRT filters as safety hooks (unit conversion, map -> scene)
+    scripts/run_sim.py
     tests/
   turtlebot3/
     turtlebot3_controls/        # ROS 2 package: world, launch, bridge params, legacy scripts
@@ -99,7 +102,64 @@ safe_edges = boundary_edges(grid, footprint_radius=profile.footprint_radius)   #
 - **Accuracy.** In the test world, obstacle side lengths are recovered to within about one cell (2 cm). Marching squares chamfers convex corners, and these corners are snapped back by intersecting the adjacent sides.
 - **Corner clearance.** At convex corners the free region can exceed the true free space by less than one cell. The safety clearance should include at least one cell.
 
-**Units.** FaST-BRT's Dubins 3D model is nondimensional (v = 1, |ω| ≤ 1). For the Burger profile (v = 0.2 m/s, ω_max = 1 rad/s), one model length unit is 0.2 m and one model time unit is 1 s (`profile.units`).
+**ROS-free closed loop.** `nav_core.sim` stands in for one Gazebo run. It reads the collision boxes of the same SDF world, keeping those that span the LiDAR plane. It ray-casts a synthetic scan that follows the `LaserScan` conventions and integrates a unicycle exactly. Every control period it runs scan → map → nominal → optional safety hook `safety(x, w_nom, grid) -> w`. The FaST-BRT filter plugs into this hook.
+
+```
+cd nav_core
+PYTHONPATH=. python scripts/run_sim.py                   # burger, hj_reach_target.world, (-0.8, -0.8, 0.2) -> (0.7, 0.2)
+PYTHONPATH=. python scripts/run_sim.py --noise 0.01      # 1 cm range noise
+```
+
+With the nominal controller only, the Burger grazes the corner of obstacle 2 and collides at t ≈ 7.3 s. This is the case the safety filter has to handle. Figures are written to `nav_core/outputs/`.
+
+**FaST-BRT witness gatekeeper (prototype).** `nav_core.safety.FastBrtGatekeeper` plugs FaST-BRT's gatekeeper into the safety hook. Each period it does three things:
+1. It takes the region the robot may use from the accumulated map, shrunk by the footprint (`free_region`). The region is an outer boundary plus one closed ring around every obstacle inside it.
+2. It puts one primitive on every ring edge.
+3. It accepts the nominal turn rate only if a witness exists from the next state: a rollout that keeps the clearance and ends on a free loiter circle.
+
+Two modes (`unknown=`), to be compared:
+- `occupied` (default): unknown space is an obstacle. The region is the known free space, so frontier edges are obstacles too. This mode is safe even against obstacles hidden behind others.
+- `free`: only detected obstacles count. The region is everything but the detected obstacles. It is less conservative, but it is safe only if every obstacle is seen before the robot enters its BRT.
+
+In both modes the modelled obstacle is the complement of the region. Every detected obstacle cell, grown by the footprint, is therefore covered completely, not just outlined by thin primitives. A free-standing obstacle (a pillar, a rock) is enclosed by its own ring. This holds even when only one face has been seen. `RegionScene` generalizes FaST-BRT's `SceneModel` (one simple polygon) to these regions. It belongs upstream in FaST-BRT. Until FaST-BRT is a submodule, `fast_brt` is imported from `PYTHONPATH`:
+
+```
+PYTHONPATH=.:<path to FaST-BRT> python scripts/run_sim.py --filter gatekeeper [--unknown free]
+```
+
+Burger, default start and goal: the run reaches the goal at t ≈ 17.6 s, with 7 interventions in 88 periods and a 5.5 cm minimum clearance. Batches of random starts × goals gave these results (no collision with either filter mode):
+
+| world | | reached | collision | timeout |
+| --- | --- | --- | --- | --- |
+| `hj_reach_target` (26 runs) | nominal only | 10 | 16 | 0 |
+| | unknown occupied | 13 | 0 | 13 |
+| | unknown free | 13 | 0 | 13 |
+| walls + free-standing pillar (35 runs) | nominal only | 22 | 13 | 0 |
+| | unknown occupied | 35 | 0 | 0 |
+| | unknown free | 35 | 0 | 0 |
+
+- **Modes look alike here.** The two modes barely differ because the 2 m arena with a 0.8 m LiDAR range has little occlusion. A larger, more occluded world is needed to compare them.
+- **Timeouts.** Pure pursuit ignores obstacles, so the gatekeeper keeps rejecting it and the robot loiters on its certified circle. This is a liveness problem of the nominal controller, not of the filter.
+- **Geometry.** The 2 m arena is tight for a certified loiter circle. What matters is the turning radius v / ω_max. At 0.2 m there is no witness at the start, so the Burger profile uses 0.1 m (v = 0.1 m/s, ω_max = 1 rad/s). This is also within the differential-drive limit v + ω_max · track / 2 ≤ wheel speed, which `load_profile` checks. The Burger's 0.22 m/s and 2.84 rad/s maxima cannot be reached at the same time.
+- **Edge cutting.** Edges are cut so that no primitive reaches more than one cell off its edge (`h_max`).
+
+**Obstacle layer.** `extract_obstacles(grid, offset=0)` returns the obstacles of the accumulated map (README, Design decisions 1–4):
+- the obstacles themselves: connected components of occupied cells, with touching objects merged into one;
+- their faces: enclosing lines with a free-side normal;
+- their corners: where two faces meet, flagged convex or concave with respect to the obstacle.
+
+Results:
+- *Test world, noise-free.* `hj_reach_target` gives one obstacle with 12 faces. Its 4 convex corners are exactly the outer corners of obstacles 1 and 2. Obstacle 1's sides come out as 0.43 / 0.50 / 0.53 / 0.39 m (true 0.4 × 0.5 m).
+- *Enclosure.* Every face lies at least 0.95 cm outside the true obstacles. With `offset` = the footprint radius, the faces describe the configuration-space obstacle.
+- *Noise.* With 1 cm range noise and 10 scans per place, there are 13 faces and 5 convex corners. Here a face can cut up to 0.6 cm into the true obstacle, because the map itself is noisy; the safety clearance (1.5 cells) covers this.
+
+Gatekeeper comparison, primitives from faces vs from the region's rings: there are no collisions with either. Reached and timeout counts are identical. The minimum clearance grows from 3.4 to 5.5 cm (`hj_reach_target`) and from 2.5 to 4.8 cm (pillar world). This is because the faces enclose the obstacles with square corners. The cost stays at about 15–30 ms per step.
+
+**Scan conventions** (REP 117):
+- `+inf`, or a reading ≥ range max, means no return: the ray is free up to the range.
+- `nan`, `-inf` and readings below `range_min` are invalid and are skipped. They never clear cells.
+
+**Units.** FaST-BRT's Dubins 3D model is nondimensional (v = 1, |ω| ≤ 1). For the Burger profile (v = 0.1 m/s, ω_max = 1 rad/s), one model length unit is 0.1 m and one model time unit is 1 s (`profile.units`).
 
 ## TurtleBot3
 
@@ -173,6 +233,31 @@ pkill -f gazebo
 pkill -f ros
 ```
 
+## Design decisions
+
+Decisions taken so far, with their reasons, so that they are not revisited by accident. Date: 2026-11-15.
+
+**1. Two layers: region for safety, obstacles for primitives (hybrid).** Both layers are computed from the accumulated occupancy grid in every control period.
+- *Safety layer (region).* The region is the part of the map the robot may use, shrunk by the footprint: an outer boundary plus one closed ring around every obstacle inside it. The complement of the region is the modelled obstacle. Witnesses are verified against its signed distance. This layer guarantees that every detected cell is covered and handles frontiers and occlusion.
+- *Obstacle layer.*
+  - Connected components of occupied cells are the obstacles.
+  - Each obstacle yields faces: enclosing lines along its free-facing boundary, with collinear pieces merged.
+  - Faces give side-length estimates, obstacle IDs and the list of corners where two faces meet.
+  - The faces (plus frontier edges, in the `unknown=occupied` mode) become the primitives. The primitives feed the HJ terms: candidate controls, U.
+- *Why not region only.* There is no obstacle identity, no side lengths and no corner list, and edges are cut at arbitrary points. It also does not match the method's story: detect an obstacle → primitive → BRT.
+- *Why not obstacles only.* Coverage, occlusion and unknown space would have to be redesigned and re-proven.
+- *Consequences.* Safety never depends on how well the faces are fitted; fitting quality affects only efficiency (interventions, timeouts). Taking obstacles from the accumulated map, not from single scans, avoids data association across scans: an obstacle grows in the map as more of it is seen.
+
+**2. Obstacles that touch are one obstacle.** A connected component of occupied cells is one obstacle, even when it is physically several objects. For example, in `hj_reach_target.world` obstacle 1, obstacle 2 and the west wall touch, so they form a single obstacle. The faces and corners are still correct; only the IDs merge. Splitting such a component (e.g. at concave corners) is possible later if needed.
+
+**3. Long faces are cut into several collinear primitives.** A primitive of length L is an L × L/√α rectangle, so one primitive per long wall would reach far into the free space. A face keeps one ID and one length estimate. The cut points are collinear, so they are not corners.
+
+**4. Corner list for the leaking-corner update.** The obstacle layer outputs where two faces of an obstacle meet at an angle. This list is the input for the leaking-corner value update (HJ_local_update, in FaST-BRT). The exact format is to be agreed with the HJ_local_update side.
+
+**5. Two filter modes are kept for comparison.**
+- `unknown=occupied` treats unknown space as an obstacle. It is safe against occlusion surprises.
+- `unknown=free` counts only detected obstacles.
+
 ## TODO
 
 **Integration**
@@ -185,6 +270,14 @@ pkill -f ros
 - [x] Robot profiles and units (`robots/`, `nav_core.robots`)
 - [x] Accumulated occupancy grid and boundary edges with obstacle side-length estimates (`nav_core.mapping`)
 - [x] Pure-pursuit nominal controller for Dubins 3D (`nav_core.nominal`)
+- [x] ROS-free closed-loop simulator on the Gazebo SDF world (`nav_core.sim`, `scripts/run_sim.py`)
+- [x] FaST-BRT witness gatekeeper as a `nav_core.sim` safety hook (prototype: `fast_brt` from `PYTHONPATH`, Dubins 3D), with free-standing obstacles and two modes (unknown occupied / free)
+- [ ] A larger, occluded test world to compare the two modes
+- [x] Obstacle layer (Design decisions 1–4, `nav_core.mapping.extract_obstacles`): connected components → enclosing faces (shallow turns merged) → lengths, IDs, corners (convex / concave)
+- [x] Gatekeeper primitives from the obstacle layer (`primitives="faces"`, default) + frontier edges; margin still from the region
+- [ ] Derive the face-fit tolerance from the sensor noise (profile field). Defaults to 1.5 cells, which suits ~1 cm noise with several scans per place; 2 cm noise needs about 2 cells
+- [ ] Agree on the corner-list format with the HJ_local_update side
+- [ ] A map-aware nominal controller (MPPI on the accumulated map). Pure pursuit times out in 14 of 26 gatekeeper runs.
 - [ ] ROS 2 node `fastbrt_nav`:
   - subscribe to `/scan` and `/odom`, reading the scan geometry from the message;
   - run mapping → nominal → filter and publish `cmd_vel`;
@@ -200,7 +293,7 @@ pkill -f ros
 - [ ] Dubins 4D and 6D dynamics and their offline values
 - [ ] Leaking-corner value updates (HJ_local_update) inside FaST-BRT
 - [ ] A safety-filter interface that takes the nominal control as input, e.g. `SafetyFilter.step(x, u_nom, scene)`
-- [ ] A scene model built from an edge set + signed distance, for accumulated maps whose free space has holes
+- [ ] Move `RegionScene` (`nav_core/safety/fastbrt_gatekeeper.py`) into FaST-BRT. It generalizes `SceneModel` from one simple polygon to an outer boundary plus closed rings around obstacles, which accumulated maps with free-standing obstacles need.
 - [ ] Save / load of the precomputed values together with their grid parameters
 
 ## Open questions

@@ -20,7 +20,7 @@ class OccupancyGrid:
     """Cell (i, j) = (row along y, column along x); cell centres at
     origin + (j + 0.5, i + 0.5) * resolution."""
 
-    def __init__(self, origin, size, resolution: float, l_free: float = -0.4, l_occ: float = 0.85,
+    def __init__(self, origin, size, resolution: float, l_free: float = -0.7, l_occ: float = 0.85,
                  l_min: float = -4.0, l_max: float = 4.0, threshold: float = 0.6):
         self.origin = np.asarray(origin, float)
         self.res = float(resolution)
@@ -43,14 +43,20 @@ class OccupancyGrid:
         j, i = ij[:, 0], ij[:, 1]
         return i, j, (i >= 0) & (i < self.ny) & (j >= 0) & (j < self.nx)
 
-    def integrate_scan(self, pose, angles, ranges, range_max: float) -> None:
+    def integrate_scan(self, pose, angles, ranges, range_max: float, range_min: float = 0.0) -> None:
         """``pose`` = (x, y, theta) of the sensor; ``angles`` relative to theta;
-        ``ranges`` in metres (inf / nan / >= range_max: no hit within range)."""
+        ``ranges`` in metres, following sensor_msgs/LaserScan (REP 117):
+        +inf or >= range_max is no return within range (the ray is free up to
+        range_max); nan, -inf and readings below ``range_min`` are invalid and
+        the ray is skipped, since it may hide a close obstacle."""
         x, y, th = pose
         ranges = np.asarray(ranges, float)
-        hit = np.isfinite(ranges) & (ranges < range_max)
+        angles = np.asarray(angles, float)
+        valid = (ranges >= range_min) & ~np.isnan(ranges)                # nan / -inf / too close: skip
+        ranges, angles = ranges[valid], angles[valid]
+        hit = ranges < range_max
         r = np.where(hit, ranges, range_max)
-        phi = th + np.asarray(angles, float)
+        phi = th + angles
         step = 0.5 * self.res
         t = np.arange(0.0, range_max + step, step)                       # (S,)
         on_ray = t[None, :] < (r[:, None] - step)                        # stop half a cell short of the hit

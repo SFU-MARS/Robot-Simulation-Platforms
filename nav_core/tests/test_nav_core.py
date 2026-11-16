@@ -1,3 +1,5 @@
+import dataclasses
+
 import numpy as np
 import pytest
 
@@ -32,8 +34,11 @@ def scan(grid, pose, rng=0.8, n=360, boxes=(OBST_1, OBST_2, *WALLS)):
 
 def test_profiles():
     p = load_profile("burger").require_ready()
-    assert p.units.length == pytest.approx(0.2) and p.units.time == pytest.approx(1.0)
-    assert p.units.pos_to_model([0.2, 0.4]) == pytest.approx([1.0, 2.0])
+    assert p.units.length == pytest.approx(0.1) and p.units.time == pytest.approx(1.0)
+    assert p.units.pos_to_model([0.2, 0.4]) == pytest.approx([2.0, 4.0])
+    fast = dataclasses.replace(p, phys={**p.phys, "v": 0.2, "w_max": 2.0})
+    with pytest.raises(ValueError, match="wheel_v_max"):
+        fast.check_limits()                                     # outer wheel would need 0.36 m/s
     for name in ("qbot", "crazyflie"):
         with pytest.raises(RuntimeError):
             load_profile(name).require_ready()
@@ -41,7 +46,7 @@ def test_profiles():
 
 def test_scan_marks_free_hit_and_shadow():
     g = OccupancyGrid.from_profile(load_profile("burger"))
-    for _ in range(2):                                    # two scans pass the 0.6 log-odds threshold
+    for _ in range(2):
         scan(g, (-0.8, -0.8, 0.0))
     s = g.state()
     cell = lambda x, y: s[g.world_to_cell([[x, y]])[0][0], g.world_to_cell([[x, y]])[1][0]]

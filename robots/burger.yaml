@@ -3,12 +3,17 @@ name: burger
 status: ready
 dynamics: dubins3d               # model name in FaST-BRT
 phys:
-  v: 0.2                         # m/s, constant forward speed (Burger max ~0.22)
-  w_max: 1.0                     # rad/s (Burger max ~2.84; kept low so the turning radius is 0.2 m)
+  v: 0.1                         # m/s, constant forward speed
+  w_max: 1.0                     # rad/s. Turning radius v / w_max = 0.1 m: with 0.2 m the 2 m arena
+                                 # has no certified loiter circle at the start
+  track_width: 0.160             # m, wheel separation (differential drive)
+  wheel_v_max: 0.22              # m/s, wheel speed limit: needs v + w_max * track_width / 2 <= this
 footprint_radius: 0.105          # m
 sensor:
   type: lidar2d                  # LDS-01
   range: 0.8                     # m, software cut-off (hardware reaches 3.5 m)
+  range_min: 0.12                # m, LDS-01 minimum range
+  height: 0.17                   # m, scan plane above the floor (approx. base_scan)
   fov: 6.283185307179586         # rad
   n_rays: 360
   rate_hz: 5.0                   # real LDS-01 rate
