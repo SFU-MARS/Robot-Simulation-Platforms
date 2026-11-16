@@ -1,0 +1,20 @@
+# Crazyflie -- 6D. PLACEHOLDER: dynamics (FaST-BRT), simulator and sensor to be
+# filled once the 6D model is provided.
+name: crazyflie
+status: placeholder
+dynamics: crazyflie6d
+phys: {}
+footprint_radius: null
+sensor:
+  type: null
+  range: null
+  fov: null
+  n_rays: null
+  rate_hz: null
+ctrl_dt: null
+map:
+  origin: null
+  size: null
+  resolution: null
+world: null
+base_value: null

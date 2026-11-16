@@ -1,0 +1,21 @@
+# Quanser QBot -- Dubins 4D (x, y, theta, v), simulated in Gazebo. PLACEHOLDER:
+# Gazebo model, dynamics parameters and sensor to be filled; dynamics come from
+# FaST-BRT.
+name: qbot
+status: placeholder
+dynamics: dubins4d
+phys: {}
+footprint_radius: null
+sensor:
+  type: lidar2d
+  range: null
+  fov: 6.283185307179586
+  n_rays: null
+  rate_hz: null
+ctrl_dt: null
+map:
+  origin: null
+  size: null
+  resolution: null
+world: null
+base_value: null

@@ -1,0 +1,21 @@
+# TurtleBot3 Burger -- constant-speed Dubins 3D (x, y, theta), control = turn rate.
+name: burger
+status: ready
+dynamics: dubins3d               # model name in FaST-BRT
+phys:
+  v: 0.2                         # m/s, constant forward speed (Burger max ~0.22)
+  w_max: 1.0                     # rad/s (Burger max ~2.84; kept low so the turning radius is 0.2 m)
+footprint_radius: 0.105          # m
+sensor:
+  type: lidar2d                  # LDS-01
+  range: 0.8                     # m, software cut-off (hardware reaches 3.5 m)
+  fov: 6.283185307179586         # rad
+  n_rays: 360
+  rate_hz: 5.0                   # real LDS-01 rate
+ctrl_dt: 0.2                     # s, one control period per scan
+map:
+  origin: [-1.05, -1.05]         # m, lower-left corner (walls inside the map)
+  size: [2.1, 2.1]               # m
+  resolution: 0.02               # m / cell
+world: turtlebot3/turtlebot3_controls/hj_reach_target.world
+base_value: null                 # offline value file (FaST-BRT), set once it is computed
