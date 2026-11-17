@@ -8,16 +8,19 @@ the free polygon the gatekeeper uses).
     PYTHONPATH=. python scripts/run_sim.py                                   # nominal only
     PYTHONPATH=.:<path to FaST-BRT> python scripts/run_sim.py --filter gatekeeper
     PYTHONPATH=. python scripts/run_sim.py --goal 0.7 0.2 --x0 -0.8 -0.8 0.2 --out outputs/sim_burger.png
+    PYTHONPATH=.:<path to FaST-BRT> python scripts/run_sim.py --nominal mppi --filter gatekeeper \
+        --world ../turtlebot3/turtlebot3_controls/worlds/occluded_4x4.world --x0 -0.9 -1.4 0 --goal 0.9 -0.3 --t-max 100
 """
 
 from __future__ import annotations
 
 import argparse
+import dataclasses
 from pathlib import Path
 
 import numpy as np
 
-from nav_core.mapping import FREE, OCCUPIED, OccupancyGrid, boundary_edges, free_region
+from nav_core.mapping import FREE, OCCUPIED, OccupancyGrid, boundary_edges, extract_obstacles, free_region
 from nav_core.nominal import make_nominal
 from nav_core.robots import ROBOTS_DIR, load_profile
 from nav_core.sim import World, run_episode
@@ -34,7 +37,8 @@ def plot(ep, world, profile, goal, path, title, unknown_free=False, n_panels=4):
     snaps = ep.snapshots
     idx = np.unique(np.linspace(0, len(snaps) - 1, n_panels).round().astype(int))
     fig, axes = plt.subplots(1, len(idx), figsize=(4.2 * len(idx), 4.4), squeeze=False)
-    g = OccupancyGrid.from_profile(profile)
+    G = ep.grid
+    g = OccupancyGrid(G.origin, (G.nx * G.res, G.ny * G.res), G.res)
     ext = [g.origin[0], g.origin[0] + g.nx * g.res, g.origin[1], g.origin[1] + g.ny * g.res]
     for ax, i in zip(axes[0], idx):
         t, pose, lo = snaps[i]
@@ -73,11 +77,14 @@ def plot(ep, world, profile, goal, path, title, unknown_free=False, n_panels=4):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--robot", default="burger")
-    ap.add_argument("--world", default=None, help="SDF world (default: the profile's)")
+    ap.add_argument("--world", default=None,
+                    help="SDF world (default: the profile's; another world gets a map around its obstacles)")
     ap.add_argument("--x0", type=float, nargs=3, default=[-0.8, -0.8, 0.2])
     ap.add_argument("--goal", type=float, nargs=2, default=[0.7, 0.2])
     ap.add_argument("--t-max", type=float, default=30.0)
     ap.add_argument("--noise", type=float, default=0.0, help="range noise std (m)")
+    ap.add_argument("--nominal", default="pursuit", choices=["pursuit", "mppi"])
+    ap.add_argument("--sensing-range", type=float, default=None, help="override the profile's LiDAR range (m)")
     ap.add_argument("--filter", default="none", choices=["none", "gatekeeper"],
                     help="gatekeeper: FaST-BRT witness gatekeeper (fast_brt must be importable)")
     ap.add_argument("--unknown", default="occupied", choices=["occupied", "free"],
@@ -86,19 +93,28 @@ def main():
     args = ap.parse_args()
 
     profile = load_profile(args.robot).require_ready()
+    if args.sensing_range is not None:
+        profile = dataclasses.replace(profile, sensor=dataclasses.replace(profile.sensor, range=args.sensing_range))
     world = World.from_sdf(args.world or REPO / profile.world, plane_z=profile.sensor.height)
-    safety, title = None, "nominal only"
+    grid = None
+    if args.world is not None:
+        origin, size = world.bounds()
+        grid = OccupancyGrid(origin, size, profile.map.resolution)
+    safety, title = None, f"{args.nominal} only"
     if args.filter == "gatekeeper":
         from nav_core.safety import FastBrtGatekeeper
-        safety, title = FastBrtGatekeeper(profile, unknown=args.unknown), f"FaST-BRT gatekeeper, unknown {args.unknown}"
-    ep = run_episode(profile, world, args.x0, args.goal, make_nominal(profile), safety=safety,
-                     t_max=args.t_max, snapshot_every=1.0, noise_std=args.noise)
+        safety = FastBrtGatekeeper(profile, unknown=args.unknown)
+        title = f"{args.nominal} + FaST-BRT gatekeeper, unknown {args.unknown}"
+    ep = run_episode(profile, world, args.x0, args.goal, make_nominal(profile, args.nominal), safety=safety,
+                     t_max=args.t_max, snapshot_every=1.0, noise_std=args.noise, grid=grid)
     clear = float(world.distance(ep.traj[:, :2]).min() - profile.footprint_radius)
     print(f"{profile.name}, {title}: {ep.status} at t = {ep.t:.2f} s, {len(ep.cmds)} control periods, "
           f"min clearance {clear:.3f} m" + (f", {safety.interventions} interventions" if safety else ""))
-    for e in sorted(boundary_edges(ep.grid), key=lambda e: -e.length):
-        if e.kind == "obstacle" and e.length >= 0.1:
-            print(f"  obstacle side {e.length:.3f} m  {np.round(e.a, 3)} -> {np.round(e.b, 3)}")
+    om = extract_obstacles(ep.grid)
+    print(f"  {om.n} obstacles, {len(om.faces)} faces, {sum(c.convex for c in om.corners)} convex corners")
+    for f in sorted(om.faces, key=lambda f: -f.length):
+        if f.length >= 0.1:
+            print(f"  obstacle {f.obstacle} face {f.length:.3f} m  {np.round(f.a, 3)} -> {np.round(f.b, 3)}")
     plot(ep, world, profile, args.goal, Path(args.out), title, unknown_free=(args.unknown == "free"))
     print(f"figure: {args.out}")
 

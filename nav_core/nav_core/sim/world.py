@@ -89,6 +89,17 @@ class World:
             r = np.where(ok, np.minimum(r, t), r)
         return np.where(r < range_max, r, np.inf)
 
+    def bounds(self, margin: float = 0.05):
+        """(origin, size) of the axis-aligned box around every obstacle, grown by ``margin``."""
+        pts = []
+        for b in self.boxes:
+            c, s = np.cos(b.yaw), np.sin(b.yaw)
+            loc = np.array([[-1, -1], [1, -1], [1, 1], [-1, 1]]) * b.half
+            pts.append(loc @ np.array([[c, s], [-s, c]]) + b.center)
+        pts = np.vstack(pts)
+        lo, hi = pts.min(0) - margin, pts.max(0) + margin
+        return tuple(float(v) for v in lo), tuple(float(v) for v in hi - lo)
+
     def distance(self, xy: np.ndarray) -> np.ndarray:
         """Signed distance to the nearest box."""
         return np.min([b.distance(xy) for b in self.boxes], axis=0) if self.boxes else np.full(len(np.atleast_2d(xy)), np.inf)

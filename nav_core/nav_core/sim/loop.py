@@ -53,14 +53,16 @@ class Episode:
 
 def run_episode(profile, world: World, x0, goal, nominal, safety: Optional[Callable] = None,
                 t_max: float = 60.0, goal_radius: float = 0.1, n_sub: int = 10,
-                snapshot_every: Optional[float] = None, noise_std: float = 0.0, seed: int = 0) -> Episode:
-    """``nominal.control(x, goal) -> w``; ``noise_std``: Gaussian range noise (m)."""
+                snapshot_every: Optional[float] = None, noise_std: float = 0.0, seed: int = 0,
+                grid: Optional[OccupancyGrid] = None) -> Episode:
+    """``nominal.control(x, goal, grid) -> w``; ``noise_std``: Gaussian range noise (m);
+    ``grid``: the (empty) map to fill, default the profile's map."""
     profile.require_ready()
     v, dt = profile.phys["v"], profile.ctrl_dt
     s = profile.sensor
     angles = np.arange(s.n_rays) * s.fov / s.n_rays
     rng = np.random.default_rng(seed)
-    grid = OccupancyGrid.from_profile(profile)
+    grid = OccupancyGrid.from_profile(profile) if grid is None else grid
     x = np.array(x0, float)
     traj, cmds, snaps = [x.copy()], [], []
     t = 0.0
@@ -74,7 +76,7 @@ def run_episode(profile, world: World, x0, goal, nominal, safety: Optional[Calla
         grid.integrate_scan(x, angles, ranges, s.range, s.range_min)
         if every is not None and k % every == 0:
             snaps.append((t, x.copy(), grid.logodds.copy()))
-        w_nom = nominal.control(x, goal)
+        w_nom = nominal.control(x, goal, grid)
         try:
             ws = w_nom if safety is None else safety(x, w_nom, grid)
         except NotImplementedError as e:             # a case the filter does not support (subclass of RuntimeError)

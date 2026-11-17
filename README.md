@@ -15,7 +15,7 @@ Each control period:
                                                   HJ safety filter (FaST-BRT) ──► /cmd_vel
 ```
 
-- **Nominal controller.** It drives towards the goal, ignores obstacles and carries no safety guarantee. Pure pursuit comes first, MPPI later.
+- **Nominal controller.** It drives towards the goal and carries no safety guarantee. Two are available: pure pursuit, which ignores the map, and MPPI on the accumulated map, which is optimistic about unknown space.
 - **Safety filter.** There is one HJ primitive per boundary edge, transported from a single precomputed value function. The filter overrides the nominal control only when needed. Unknown space is treated as occupied.
 - **Map.** It accumulates over the whole run. The environment is static, so the known free space only grows. In simulation the pose is known (odometry / ground truth), so no SLAM is needed.
 
@@ -57,21 +57,21 @@ Robot-Simulation-Platforms/
     nav_core/                   # the importable package
       robots/                   #   profile loading, physical <-> model units
       mapping/                  #   occupancy grid, region, boundary edges, obstacle layer (faces, corners)
-      nominal/                  #   nominal controllers (pursuit; MPPI planned)
+      nominal/                  #   nominal controllers: pursuit, map-aware MPPI
       sim/                      #   ROS-free closed loop: SDF world, synthetic LiDAR, unicycle plant
       safety/                   #   FaST-BRT filters as safety hooks (unit conversion, map -> scene)
     scripts/run_sim.py
     tests/
   turtlebot3/
-    turtlebot3_controls/        # ROS 2 package: world, launch, bridge params, legacy scripts
+    turtlebot3_controls/        # ROS 2 package: worlds (hj_reach_target, worlds/occluded_4x4), launch, bridge params, legacy scripts
     turtlebot3_simulations/     # submodule (ROBOTIS), not modified
+  ros2/fastbrt_nav/             # ROS 2 node: /scan + /odom -> nav_core + FaST-BRT -> /cmd_vel, RViz map and markers
   mujoco/unitree_mujoco/        # submodule (Unitree, MuJoCo)
   unitree_mujoco/               # submodule (same commit as above)
 ```
 
 Planned additions:
 - `FaST-BRT/`, as a submodule;
-- a ROS 2 node package `fastbrt_nav`: scan / odom → `nav_core` + FaST-BRT → `cmd_vel`;
 - our own copy of the robot SDF models, so that the LiDAR range and rate can be set per profile without modifying `turtlebot3_simulations`.
 
 `nav_core` deliberately does not import `rclpy`. All robots and simulators share it, and it is tested without ROS.
@@ -143,6 +143,42 @@ Burger, default start and goal: the run reaches the goal at t ≈ 17.6 s, with 7
 - **Geometry.** The 2 m arena is tight for a certified loiter circle. What matters is the turning radius v / ω_max. At 0.2 m there is no witness at the start, so the Burger profile uses 0.1 m (v = 0.1 m/s, ω_max = 1 rad/s). This is also within the differential-drive limit v + ω_max · track / 2 ≤ wheel speed, which `load_profile` checks. The Burger's 0.22 m/s and 2.84 rad/s maxima cannot be reached at the same time.
 - **Edge cutting.** Edges are cut so that no primitive reaches more than one cell off its edge (`h_max`).
 
+**Nominal controllers.**
+- `pursuit` always turns the robot's heading towards the goal, at a turn rate proportional to the heading error (capped at ω_max). It ignores the map, so it drives straight into obstacles.
+- `mppi` samples many short turn-rate sequences, simulates each one, and blends them, favouring low cost. The cost has two parts:
+  - the shortest-path distance to the goal through the known map, computed around obstacles;
+  - a penalty for getting close to occupied cells.
+
+  It is optimistic: unknown space counts as drivable.
+
+Batches of random starts × goals, with no filter and with the gatekeeper:
+
+| world | nominal | nominal only | + gatekeeper |
+| --- | --- | --- | --- |
+| `hj_reach_target` (26 runs) | pursuit | 10 reached, 16 collisions | 13 reached, 0 collisions, 13 timeouts |
+| | mppi | 19 reached, 7 collisions | 13 reached, 0 collisions, 13 timeouts |
+| walls + pillar (35 runs) | pursuit | 22 reached, 13 collisions | 35 reached |
+| | mppi | 34 reached, 1 collision | 35 reached, filter never had to intervene |
+
+**Why the 13 timeouts in `hj_reach_target` do not go away with MPPI.** The robot model cannot stop: it always drives at constant speed and can only steer. The only way to "wait safely" is to drive in a tight circle (radius 0.1 m). The gatekeeper therefore accepts a command only if, afterwards, the robot still has a way to reach known free space wide enough to circle in. That takes about 0.45 m: the circle's 0.2 m diameter, plus the robot's width (2 × 0.105 m), plus a margin. The upper-left area of this world is reachable only through a 0.4 m gap between obstacle 1 and the north wall. The robot itself would fit, but it could not circle inside the gap, so the gatekeeper never lets it in. Exactly 13 of the 26 runs need that gap. This is a limit of the constant-speed model, not of the nominal controller. A robot that can brake (Dubins 4D, QBot) can "wait safely" by stopping and does not have it.
+
+**Occluded world and the two filter modes.** `worlds/occluded_4x4.world` is a 4 × 4 m arena with:
+- three screens, each with a box hidden right behind one of its ends;
+- three free-standing pillars.
+
+The sweep uses MPPI as the nominal controller and varies the LiDAR range. There are 26 runs per row: random starts × goals plus the three traps.
+
+| LiDAR range | no filter | unknown = occupied | unknown = free |
+| --- | --- | --- | --- |
+| 0.3 m (3 × turning radius) | 22 reached, 4 collisions | cannot start (26 runs) | 21 reached, **5 collisions** |
+| 0.5 m (5 ×) | 24 reached, 2 collisions | 19 reached, 0 collisions, 7 timeouts | 19 reached, 0 collisions, 7 timeouts |
+| 0.8 m (8 ×) | 22 reached, 4 collisions | 22 reached, 0 collisions, 4 timeouts | 20 reached, 0 collisions, 6 timeouts |
+
+How to read the table:
+- *`unknown = free` is not safe when the LiDAR range is short.* This mode treats unseen space as drivable, so the filter can approve a path into space that hides an obstacle. With a 0.3 m range, the obstacle is seen too late to turn away.
+- *`unknown = occupied` never collides, but needs a minimum range.* After the first scan, the known free space must already hold the circle the robot waits on: roughly LiDAR range ≥ robot radius + 2 × turning radius + margin ≈ 0.34 m. At 0.3 m it cannot start.
+- *At 5× and 8× the turning radius both modes are safe.* `free` was not faster.
+
 **Obstacle layer.** `extract_obstacles(grid, offset=0)` returns the obstacles of the accumulated map (README, Design decisions 1–4):
 - the obstacles themselves: connected components of occupied cells, with touching objects merged into one;
 - their faces: enclosing lines with a free-side normal;
@@ -160,6 +196,52 @@ Gatekeeper comparison, primitives from faces vs from the region's rings: there a
 - `nan`, `-inf` and readings below `range_min` are invalid and are skipped. They never clear cells.
 
 **Units.** FaST-BRT's Dubins 3D model is nondimensional (v = 1, |ω| ≤ 1). For the Burger profile (v = 0.1 m/s, ω_max = 1 rad/s), one model length unit is 0.1 m and one model time unit is 1 s (`profile.units`).
+
+## ROS 2 node: fastbrt_nav
+
+`ros2/fastbrt_nav` runs the same loop as `nav_core.sim` against Gazebo (or a real robot):
+
+```
+/scan, /odom → accumulated map → nominal (pursuit | mppi) → FaST-BRT gatekeeper → /cmd_vel
+```
+
+Behaviour:
+- It integrates the newest scan at the newest pose, once per control period (the profile's `ctrl_dt`).
+- It publishes the gatekeeper's zero-order-hold turn rates on a sub-period timer.
+- It drives at the profile's constant speed. It stops (zero `cmd_vel`) before the first scan, at the goal, and if the filter cannot certify the start or fails.
+- It uses only `LaserScan`, `Odometry` and `Twist`, so the same code runs on Humble and Jazzy.
+
+It has not run in Gazebo yet. Only the message conversions (`fastbrt_nav/conversions.py`) are unit-tested, without ROS.
+
+Build and run (from `turtlebot3/`, next to `turtlebot3_controls`):
+
+```
+export PYTHONPATH=<repo>/nav_core:<path to FaST-BRT>:$PYTHONPATH     # nav_core and fast_brt are not ROS packages
+colcon build --base-paths . ../ros2 --packages-select turtlebot3_controls fastbrt_nav
+source install/setup.bash
+export TURTLEBOT3_MODEL=burger
+ros2 launch fastbrt_nav fastbrt_nav.launch.py                       # hj_reach_target, (-0.8, -0.8, 0.2) -> (0.7, 0.2)
+ros2 launch fastbrt_nav fastbrt_nav.launch.py \
+    world:=$(ros2 pkg prefix turtlebot3_controls)/share/turtlebot3_controls/worlds/occluded_4x4.world \
+    x_pose:=-0.9 y_pose:=-1.4 yaw_pose:=0.0 goal:="[0.9, -0.3]" map_origin:="[-2.1, -2.1]" map_size:="[4.2, 4.2]"
+```
+
+Launch arguments:
+- `robot` (profile, default `burger`), `goal`;
+- `nominal` (`mppi` | `pursuit`), `filter` (`gatekeeper` | `none`), `unknown` (`occupied` | `free`), `primitives` (`faces` | `rings`);
+- `map_origin` / `map_size` (default: the profile's map);
+- `log_path` (CSV of t, pose, w_nom, w and decision time per period).
+
+**Frames.** Gazebo's diff-drive odometry starts at the spawn pose. The launch file therefore passes `x_pose` / `y_pose` / `yaw_pose` to the node, which maps odometry to world coordinates. The map, the goal and the profile are in world coordinates. The map and markers are published in the `odom` frame.
+
+**RViz topics.**
+- `map` (`nav_msgs/OccupancyGrid`);
+- `fastbrt_markers`: obstacle faces (blue), filter region (purple), convex corners (red), concave corners (orange).
+
+**To check on the simulation machine:**
+- `/scan` and `/odom` are published;
+- the robot moves on `/cmd_vel` (`Twist`, per the bridge parameters);
+- the decision time stays below `ctrl_dt` (see `log_path`).
 
 ## TurtleBot3
 
@@ -272,20 +354,20 @@ Decisions taken so far, with their reasons, so that they are not revisited by ac
 - [x] Pure-pursuit nominal controller for Dubins 3D (`nav_core.nominal`)
 - [x] ROS-free closed-loop simulator on the Gazebo SDF world (`nav_core.sim`, `scripts/run_sim.py`)
 - [x] FaST-BRT witness gatekeeper as a `nav_core.sim` safety hook (prototype: `fast_brt` from `PYTHONPATH`, Dubins 3D), with free-standing obstacles and two modes (unknown occupied / free)
-- [ ] A larger, occluded test world to compare the two modes
+- [x] Occluded test world (`worlds/occluded_4x4.world`) and LiDAR-range sweep of the two modes
+- [ ] Start-up check that the LiDAR range lets `unknown=occupied` start (≈ robot radius + 2 × turning radius + margin)
 - [x] Obstacle layer (Design decisions 1–4, `nav_core.mapping.extract_obstacles`): connected components → enclosing faces (shallow turns merged) → lengths, IDs, corners (convex / concave)
 - [x] Gatekeeper primitives from the obstacle layer (`primitives="faces"`, default) + frontier edges; margin still from the region
 - [ ] Derive the face-fit tolerance from the sensor noise (profile field). Defaults to 1.5 cells, which suits ~1 cm noise with several scans per place; 2 cm noise needs about 2 cells
 - [ ] Agree on the corner-list format with the HJ_local_update side
-- [ ] A map-aware nominal controller (MPPI on the accumulated map). Pure pursuit times out in 14 of 26 gatekeeper runs.
-- [ ] ROS 2 node `fastbrt_nav`:
+- [x] Map-aware MPPI nominal controller (`nav_core.nominal.MPPI`: geodesic cost-to-go on the accumulated map + obstacle distance)
+- [x] ROS 2 node `fastbrt_nav` (written; conversions unit-tested; not yet run in Gazebo):
   - subscribe to `/scan` and `/odom`, reading the scan geometry from the message;
   - run mapping → nominal → filter and publish `cmd_vel`;
   - publish RViz markers (grid, edges) and log trajectories.
 - [ ] Closed-loop Burger in Gazebo with the nominal controller only (no filter), to check units, speed limits and timing
 - [ ] Our own copy of the Burger SDF, with the LiDAR rate and range taken from the profile
 - [ ] Generic MPPI nominal controller on FaST-BRT dynamics (3D first, then 4D / 6D)
-- [ ] Start-up check that the sensing range covers the BRT reach of the robot's dynamics
 - [ ] QBot: Gazebo model and profile values
 - [ ] Crazyflie: 6D model, simulator, sensor and profile values
 
