@@ -17,8 +17,10 @@
 | [07 MPPI 完整案例](07_mppi_walkthrough.md) | **从加载 map 到 controller 到 2D primitive，走完一个周期** |
 | [08 实验结果](08_results.md) | 各组 batch 实验的数字和结论 |
 | [09 接入 fast-brt（讨论稿）](09_fast_brt_integration.md) | SFU-MARS/fast-brt 的现状、差距清单、复用方案、待讨论问题 |
+| [10 primitive 的放置、α 与精度](10_primitive_alpha_accuracy.md) | 内移放置、离线 `V₀` 精度复核（mars-14）、α 的选择、闭环对比 |
+| [11 路线图](11_roadmap.md) | **进度总表**：已定的决策、已完成、进行中、待办、待讨论的问题 |
 
-只想快速上手：读 [01](01_overview.md) 和 [07](07_mppi_walkthrough.md) 就够。
+只想快速上手：读 [01](01_overview.md) 和 [07](07_mppi_walkthrough.md) 就够。想知道现在做到哪了：读 [11 路线图](11_roadmap.md)。
 
 ## 术语对照
 
