@@ -18,12 +18,14 @@ hook the robot runs the nominal controller only.
 
 from __future__ import annotations
 
+import copy
+
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional
 
 import numpy as np
 
-from ..mapping import OccupancyGrid
+from ..mapping import OccupancyGrid, extract_obstacles
 from .world import World
 
 __all__ = ["unicycle_step", "Episode", "run_episode"]
@@ -47,16 +49,18 @@ class Episode:
     traj: np.ndarray                         # (N, 3) states at every sub-step
     cmds: np.ndarray                         # (K, 2) (w_nom, w) per control period
     grid: OccupancyGrid                      # map at the end
-    snapshots: List[tuple] = field(default_factory=list)    # (t, pose, logodds copy)
+    snapshots: List[tuple] = field(default_factory=list)    # (t, pose, copy of the map)
     error: str = ""                                          # message when the filter stopped the run
+    events: List = field(default_factory=list)              # ObstacleEvent per period (with a tracker)
 
 
 def run_episode(profile, world: World, x0, goal, nominal, safety: Optional[Callable] = None,
                 t_max: float = 60.0, goal_radius: float = 0.1, n_sub: int = 10,
                 snapshot_every: Optional[float] = None, noise_std: float = 0.0, seed: int = 0,
-                grid: Optional[OccupancyGrid] = None) -> Episode:
+                grid: Optional[OccupancyGrid] = None, tracker=None) -> Episode:
     """``nominal.control(x, goal, grid) -> w``; ``noise_std``: Gaussian range noise (m);
-    ``grid``: the (empty) map to fill, default the profile's map."""
+    ``grid``: the (empty) map to fill, default the profile's map; ``tracker``: an
+    ``ObstacleTracker`` fed with the obstacle layer every period (events in ``Episode.events``)."""
     profile.require_ready()
     v, dt = profile.phys["v"], profile.ctrl_dt
     s = profile.sensor
@@ -67,6 +71,7 @@ def run_episode(profile, world: World, x0, goal, nominal, safety: Optional[Calla
     traj, cmds, snaps = [x.copy()], [], []
     t = 0.0
     error = ""
+    events = []
     every = None if snapshot_every is None else max(1, int(round(snapshot_every / dt)))
     status = "timeout"
     for k in range(int(round(t_max / dt))):
@@ -74,8 +79,10 @@ def run_episode(profile, world: World, x0, goal, nominal, safety: Optional[Calla
         if noise_std > 0:
             ranges = ranges + rng.normal(0.0, noise_std, ranges.shape)
         grid.integrate_scan(x, angles, ranges, s.range, s.range_min)
+        if tracker is not None:
+            events += tracker.update(extract_obstacles(grid), t, grid.res)[1]
         if every is not None and k % every == 0:
-            snaps.append((t, x.copy(), grid.logodds.copy()))
+            snaps.append((t, x.copy(), copy.deepcopy(grid)))
         w_nom = nominal.control(x, goal, grid)
         try:
             ws = w_nom if safety is None else safety(x, w_nom, grid)
@@ -104,5 +111,5 @@ def run_episode(profile, world: World, x0, goal, nominal, safety: Optional[Calla
                 break
         if status != "timeout":
             break
-    snaps.append((t, x.copy(), grid.logodds.copy()))
-    return Episode(status, t, np.array(traj), np.array(cmds), grid, snaps, error)
+    snaps.append((t, x.copy(), copy.deepcopy(grid)))
+    return Episode(status, t, np.array(traj), np.array(cmds), grid, snaps, error, events)

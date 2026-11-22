@@ -18,6 +18,7 @@ def test_cost_to_go_is_octile_in_free_space_and_goes_around_walls():
     for q in [(0.5, 0.0), (0.5, 0.5), (-0.3, 0.7)]:
         dx, dy = abs(q[0]), abs(q[1])
         assert cm.lookup(np.array([q]))[0][0] == pytest.approx(max(dx, dy) + (np.sqrt(2) - 1) * min(dx, dy), abs=0.03)
+    g = OccupancyGrid((-1, -1), (2, 2), 0.02, model="logodds")
     g.logodds[:int(1.5 / 0.02), int(1.3 / 0.02)] = 4.0           # wall x = 0.3, y in [-1, 0.5]
     cm = CostMap(g, (0.6, 0.0), 0.1)
     assert cm.lookup(np.array([[0.0, 0.0]]))[0][0] > 1.2           # around the wall's end, not 0.6 straight

@@ -10,3 +10,7 @@
 [submodule "optimized_dp"]
 	path = optimized_dp
 	url = https://github.com/SFU-MARS/optimized_dp.git
+[submodule "fast-brt"]
+	path = fast-brt
+	url = ../fast-brt.git
+	branch = robot-sim

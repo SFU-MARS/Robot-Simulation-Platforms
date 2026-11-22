@@ -2,6 +2,8 @@
 
 This repository follows the [Fast-BRT Experiment Document](https://docs.google.com/document/d/1S5lzXlQSW35xeCZrHe30NN7NRfxiYE0QOhNOWc51FYE/edit?tab=t.0). Most folders are git submodules. Clone them explicitly by adding `--recurse-submodules` to `git clone`, or run `git submodule update --init --recursive` after a checkout.
 
+**[`docs/`](docs/) walks through the code module by module (in Chinese), ending with one full MPPI control period from loading the map to the 2D primitives.** This README stays the quick reference: setup, usage, results and TODO.
+
 ## Goal
 
 The robot navigates an **unknown** map: it does not know the obstacles in advance. It senses them with a LiDAR, builds its own map while driving, and reaches a goal. An HJ reachability safety filter keeps it safe on the way.
@@ -171,8 +173,8 @@ The sweep uses MPPI as the nominal controller and varies the LiDAR range. There 
 | LiDAR range | no filter | unknown = occupied | unknown = free |
 | --- | --- | --- | --- |
 | 0.3 m (3 × turning radius) | 22 reached, 4 collisions | cannot start (26 runs) | 21 reached, **5 collisions** |
-| 0.5 m (5 ×) | 24 reached, 2 collisions | 19 reached, 0 collisions, 7 timeouts | 19 reached, 0 collisions, 7 timeouts |
-| 0.8 m (8 ×) | 22 reached, 4 collisions | 22 reached, 0 collisions, 4 timeouts | 20 reached, 0 collisions, 6 timeouts |
+| 0.5 m (5 ×) | 24 reached, 2 collisions | 19 reached, 0 collisions, 7 timeouts | 20 reached, 0 collisions, 6 timeouts |
+| 0.8 m (8 ×) | 22 reached, 4 collisions | 20 reached, 0 collisions, 6 timeouts | 20 reached, 0 collisions, 6 timeouts |
 
 How to read the table:
 - *`unknown = free` is not safe when the LiDAR range is short.* This mode treats unseen space as drivable, so the filter can approve a path into space that hides an obstacle. With a 0.3 m range, the obstacle is seen too late to turn away.
@@ -190,6 +192,49 @@ Results:
 - *Noise.* With 1 cm range noise and 10 scans per place, there are 13 faces and 5 convex corners. Here a face can cut up to 0.6 cm into the true obstacle, because the map itself is noisy; the safety clearance (1.5 cells) covers this.
 
 Gatekeeper comparison, primitives from faces vs from the region's rings: there are no collisions with either. Reached and timeout counts are identical. The minimum clearance grows from 3.4 to 5.5 cm (`hj_reach_target`) and from 2.5 to 4.8 cm (pillar world). This is because the faces enclose the obstacles with square corners. The cost stays at about 15–30 ms per step.
+
+**Obstacle tracking and detection events.** `extract_obstacles` relabels the map from scratch every period, so its obstacle ids are not stable. `ObstacleTracker.update(obstacle_map, t)` fixes that:
+- *Matching.* It matches each obstacle to the previous period's by shared occupied cells. Occupied cells persist: an obstacle grows as more of it is seen.
+- *Relabelling.* It relabels the obstacle map with stable ids.
+- *Events.* It reports what changed:
+  - `new` — a first detection;
+  - `updated` — the number of faces or corners changed, or a face endpoint moved by more than 2 cells; e.g. more of the obstacle was seen;
+  - `merged` — two tracked obstacles touched; the merged obstacle keeps the older id;
+  - `split` and `removed` — caused by noise.
+
+  Each event carries the obstacle's faces (with lengths) and corners. Obstacles of fewer than 4 cells are tracked but not reported.
+- *Purpose.* Downstream work (the leaking-corner update, logs) can then act only on the obstacles that changed.
+
+Where it is used:
+- `run_episode(..., tracker=ObstacleTracker())` collects the events, and `run_sim.py --events` prints them. In the occluded world, for example, screen_1 grows from 0.91 m to its true 1.40 m as the robot drives along it. The hidden box is detected at t ≈ 8.6 s and ends at faces of about 0.22 × 0.20 m (true 0.2 × 0.2 m).
+- `FastBrtGatekeeper` gives its faces stable ids and keeps the period's events in `gate.events`.
+- The ROS 2 node publishes every event as JSON on `obstacle_events`.
+
+**Map update model.** Each cell counts how often a ray *ended* in it (hit) and how often a ray *passed through* it (pass):
+- *occupied* if hits ≥ 20 % of all its observations (τ = 0.2);
+- *free* if it was observed with fewer hits than that;
+- *unknown* if it was never observed.
+
+Why counting rather than the classic additive log-odds score:
+- *Surface cells are partly free.* A 2 cm cell on an obstacle surface is partly obstacle and partly free. Rays that graze its free part pass through it far more often than rays end in it. With log-odds (hit +0.85, pass −0.7, clipped at ±4) those passes wipe the cell back to unknown, and faces and corners flicker.
+- *Low hit ratios still count.* A hit ratio of 20 % keeps such a cell occupied. A stray noisy hit in open space (1 hit among many passes) stays free.
+- *No clipping.* Nothing is clipped, so evidence is never forgotten.
+
+In addition, a cell that has been hit is counted as passed only by rays that go near its centre (within 0.3 cells), not by rays clipping its corner (`graze`).
+
+Comparison on the occluded world (three routes, MPPI, no filter):
+
+| map model | flicker events (0 / 1 / 2 cm noise) | false obstacle cells in open space (2 cm) | deepest face cut into a true obstacle (1 / 2 cm) |
+| --- | --- | --- | --- |
+| log-odds (previous default) | 38 / 80 / 112 | 0 | 3.0 / 2.0 cm |
+| log-odds + graze | 25 / 61 / 76 | 0 | 3.0 / 1.5 cm |
+| counts, τ = 0.1 | 0 / 6 / 23 | 31 | 0 / 4.5 cm |
+| **counts, τ = 0.2 + graze (default)** | **2 / 15 / 27** | 5 | 0.3 / 0.6 cm |
+| counts, τ = 0.3 | 6 / 19 / 35 | 0 | 3.0 / 1.0 cm |
+
+A flicker event is an `updated` event in which an obstacle lost cells; in a static world an obstacle should only grow. The previous model is still available as `OccupancyGrid(..., model="logodds")`.
+
+Switching the default did not change any batch result above except the occluded sweep, which moved by one or two runs (the numbers shown are with the new model). There were no collisions with either filter mode.
 
 **Scan conventions** (REP 117):
 - `+inf`, or a reading ≥ range max, means no return: the ray is free up to the range.
@@ -236,7 +281,8 @@ Launch arguments:
 
 **RViz topics.**
 - `map` (`nav_msgs/OccupancyGrid`);
-- `fastbrt_markers`: obstacle faces (blue), filter region (purple), convex corners (red), concave corners (orange).
+- `fastbrt_markers`: obstacle faces (blue), filter region (purple), convex corners (red), concave corners (orange);
+- `obstacle_events` (`std_msgs/String`): one JSON object per detection event: stable id, kind, faces with lengths, corners, in world coordinates.
 
 **To check on the simulation machine:**
 - `/scan` and `/odom` are published;
@@ -359,7 +405,10 @@ Decisions taken so far, with their reasons, so that they are not revisited by ac
 - [x] Obstacle layer (Design decisions 1–4, `nav_core.mapping.extract_obstacles`): connected components → enclosing faces (shallow turns merged) → lengths, IDs, corners (convex / concave)
 - [x] Gatekeeper primitives from the obstacle layer (`primitives="faces"`, default) + frontier edges; margin still from the region
 - [ ] Derive the face-fit tolerance from the sensor noise (profile field). Defaults to 1.5 cells, which suits ~1 cm noise with several scans per place; 2 cm noise needs about 2 cells
-- [ ] Agree on the corner-list format with the HJ_local_update side
+- [x] Stable obstacle ids and detection events (`ObstacleTracker`; `obstacle_events` topic in the ROS node)
+- [ ] Agree on the corner-list / event format with the HJ_local_update side
+- [ ] Recompute primitives only for obstacles with an event (now every period, from scratch)
+- [x] Edge-cell flicker under grazing rays: counting map model (τ = 0.2) + graze protection; flicker 38 / 80 / 112 → 2 / 15 / 27 events
 - [x] Map-aware MPPI nominal controller (`nav_core.nominal.MPPI`: geodesic cost-to-go on the accumulated map + obstacle distance)
 - [x] ROS 2 node `fastbrt_nav` (written; conversions unit-tested; not yet run in Gazebo):
   - subscribe to `/scan` and `/odom`, reading the scan geometry from the message;

@@ -82,3 +82,44 @@ def test_gatekeeper_around_a_pillar(unknown):
     ep = run_episode(p, PILLAR, (-0.6, -0.6, 0.0), (0.6, 0.6), make_nominal(p), safety=gate, t_max=60.0)
     assert ep.status in ("reached", "timeout"), ep.error
     assert PILLAR.distance(ep.traj[:, :2]).min() > p.footprint_radius
+
+
+def test_primitive_frames_inward_puts_the_free_side_on_the_face():
+    from nav_core.safety.fastbrt_gatekeeper import primitive_frames
+    a, b, n = np.array([0.0, 0.0]), np.array([4.0, 0.0]), np.array([0.0, 1.0])   # face on y = 0, free above
+    (c, hl, hw, beta), = primitive_frames([(a, b, n)], alpha=20.0, placement="inward")
+    assert hl == pytest.approx(2.0) and hw == pytest.approx(2.0 / np.sqrt(20.0)) and beta == pytest.approx(0.0)
+    assert c == pytest.approx([2.0, -hw])                       # rectangle y in [-2 hw, 0]: thickness behind the face
+    (c2, _, hw2, _), = primitive_frames([(a, b, n)], alpha=20.0, placement="centered")
+    assert c2 == pytest.approx([2.0, 0.0]) and hw2 == pytest.approx(hw)    # the face as midline
+    pieces = primitive_frames([(a, b, n)], alpha=20.0, placement="inward", max_side_len=1.0)
+    assert len(pieces) == 4 and all(p[1] == pytest.approx(0.5) for p in pieces)
+    with pytest.raises(ValueError):
+        primitive_frames([(a, b, n)], alpha=20.0, placement="sideways")
+
+
+def test_inward_rectangles_stay_behind_the_faces():
+    """Inward placement on a scanned map: every rectangle's back edge is on the obstacle
+    side of the region boundary, and its front edge reaches at most two cells into the
+    free region (faces are enclosing, so they sit slightly outside the region contour)."""
+    pytest.importorskip("fast_brt")
+    from nav_core.safety import FastBrtGatekeeper
+    from nav_core.safety.fastbrt_gatekeeper import _contains
+    p, g = scanned(PILLAR, AROUND)
+    gate = FastBrtGatekeeper(p, placement="inward", cut=False)
+    scene = gate.scene(np.array([0.5, 0.5, 0.0]), g)
+    cell = p.map.resolution / p.units.length
+
+    def region_sd(pts):                         # signed distance to the region alone (+ inside)
+        inside = _contains(scene.rings[0], pts)
+        for hole in scene.rings[1:]:
+            inside &= ~_contains(hole, pts)
+        d = scene._seg_dist(pts, scene._RA, scene._RB)
+        return np.where(inside, d, -d)
+
+    assert scene.frames
+    for c, hl, hw, beta in scene.frames:
+        nrm = np.array([-np.sin(beta), np.cos(beta)])
+        front, back = sorted(region_sd(np.array([np.asarray(c) + hw * nrm, np.asarray(c) - hw * nrm])), reverse=True)
+        assert front <= 2 * cell
+        assert back <= 0.0

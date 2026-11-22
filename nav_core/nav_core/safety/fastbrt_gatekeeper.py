@@ -26,8 +26,9 @@ come from:
 
   "faces" -- the obstacle layer: enclosing faces of every obstacle, shifted by
       the footprint, plus the frontier edges in the "occupied" mode.  The
-      obstacle map of the last period (``self.obstacles``) also holds the
-      corner list.
+      obstacle map of the last period (``self.obstacles``, stable ids) also
+      holds the corner list; ``self.events`` lists what changed in that
+      period (``ObstacleTracker``), e.g. for a leaking-corner update.
   "rings" -- every edge of the region's rings (the earlier behaviour).
 
 FaST-BRT works in nondimensional units (v = 1, |w| <= 1); ``profile.units``
@@ -36,6 +37,17 @@ marching-squares contour and the cell-centre distances can place an edge up
 to about one cell beyond the truly free space.  ``h_max`` (m) caps how far a
 primitive rectangle reaches off its edge: edges are cut to at most
 2 h_max sqrt(alpha) (``fast_brt.primitive.max_side_len``).
+
+``placement`` puts each primitive rectangle (length L, thickness L/sqrt(alpha))
+on its edge:
+
+  "inward" -- the rectangle's free-facing side lies on the edge and its
+      thickness is inside the obstacle, so how far the primitive (and its BRT)
+      reaches into free space depends on L only; long edges need no cutting.
+      This is the intended use of the primitive.
+  "centered" -- the edge is the rectangle's midline (FaST-BRT's ``side_frame``):
+      half the thickness reaches into free space, which ``cut`` limits by cutting
+      edges into short pieces (the earlier behaviour).
 
 Prototype: imports ``fast_brt`` from the environment (PYTHONPATH) until FaST-BRT
 is a submodule.  ``RegionScene`` generalizes FaST-BRT's SceneModel (one
@@ -47,9 +59,23 @@ from __future__ import annotations
 
 import numpy as np
 
-from ..mapping import boundary_edges, extract_obstacles, free_region
+from ..mapping import ObstacleTracker, boundary_edges, extract_obstacles, free_region, safe_free_mask
 
-__all__ = ["FastBrtGatekeeper", "make_region_scene"]
+__all__ = ["FastBrtGatekeeper", "make_region_scene", "primitive_frames"]
+
+
+def _left_normal(a, b) -> np.ndarray:
+    d = np.subtract(b, a)
+    return np.array([-d[1], d[0]]) / max(float(np.linalg.norm(d)), 1e-12)
+
+
+def _free_normal(grid, safe: np.ndarray, a, b) -> np.ndarray:
+    """Unit normal of segment a -> b (metres) pointing to the side where ``safe`` (a cell mask) is free."""
+    n = _left_normal(a, b)
+    mid = 0.5 * (np.asarray(a, float) + np.asarray(b, float))
+    i, j, inside = grid.world_to_cell(np.stack([mid + 0.75 * grid.res * n, mid - 0.75 * grid.res * n]))
+    free = [bool(ok and safe[ii, jj]) for ii, jj, ok in zip(i, j, inside)]
+    return n if free[0] or not free[1] else -n
 
 
 def _contains(ring: np.ndarray, xy: np.ndarray) -> np.ndarray:
@@ -62,32 +88,52 @@ def _contains(ring: np.ndarray, xy: np.ndarray) -> np.ndarray:
     return np.count_nonzero(crosses, axis=1) % 2 == 1
 
 
+def primitive_frames(segments, alpha: float, placement: str = "inward", max_side_len: "float | None" = None):
+    """Primitive frames (center, half length, half width, angle) for segments
+    (a, b, n), n the unit normal of the segment pointing into free space.
+    ``placement``: "inward" (the rectangle's free-facing side on the segment) or
+    "centered" (the segment as the rectangle's midline).  ``max_side_len``
+    (None: off) first cuts each segment into equal collinear pieces of at most
+    that length."""
+    if placement not in ("inward", "centered"):
+        raise ValueError(f"placement must be 'inward' or 'centered', got {placement!r}")
+    frames = []
+    for a, b, n in segments:
+        a, b, n = np.asarray(a, float), np.asarray(b, float), np.asarray(n, float)
+        length = float(np.linalg.norm(b - a))
+        if length <= 1e-9:
+            continue
+        k = 1 if max_side_len is None else max(1, int(np.ceil(length / max_side_len - 1e-9)))
+        ts = np.linspace(0.0, 1.0, k + 1)
+        beta = float(np.arctan2(*(b - a)[::-1]))
+        for t0, t1 in zip(ts[:-1], ts[1:]):
+            pa, pb = a + t0 * (b - a), a + t1 * (b - a)
+            half_len = 0.5 * length * (t1 - t0)
+            half_wid = half_len / np.sqrt(alpha)
+            center = 0.5 * (pa + pb) - (half_wid * n if placement == "inward" else 0.0)
+            frames.append((center, half_len, half_wid, beta))
+    return frames
+
+
 def make_region_scene():
     """The RegionScene class (built lazily so that fast_brt is imported only when used)."""
-    from fast_brt.filter.scene_model import SceneModel, split_edges
-    from fast_brt.primitive import side_frame
+    from fast_brt.filter.scene_model import SceneModel
 
     class RegionScene(SceneModel):
-        """SceneModel over an explicit edge set.
+        """SceneModel over an explicit set of primitive frames.
 
         ``rings``: [outer, hole, ...] polygons of the free region, or None
-        (no region: unknown space is free).  ``edges``: (a, b) segments that
-        get a primitive each.  Modelled obstacle = (complement of the region,
-        if any) U (edge rectangles); ``margin`` is the signed distance to it
-        (positive = free), as in SceneModel."""
+        (no region: unknown space is free).  ``frames``: primitive rectangles
+        (center, half length, half width, angle), see ``primitive_frames``.
+        Modelled obstacle = (complement of the region, if any) U (primitive
+        rectangles); ``margin`` is the signed distance to it (positive = free),
+        as in SceneModel."""
 
-        def __init__(self, base, dtheta_V0_T, rings, edges, alpha: float, clearance: float,
-                     max_side_len: "float | None" = None):
+        def __init__(self, base, dtheta_V0_T, rings, frames, clearance: float):
             self.base, self.dV = base, dtheta_V0_T
             self.rings = rings
             self.poly = rings[0] if rings else np.empty((0, 2))
-            edges = [(np.asarray(a, float), np.asarray(b, float)) for a, b in edges
-                     if np.linalg.norm(np.subtract(b, a)) > 1e-3]
-            if max_side_len is not None:
-                edges = split_edges(edges, max_side_len)
-            self.frames = [side_frame(a, b, alpha) for a, b in edges]
-            self.A = np.array([e[0] for e in edges]).reshape(-1, 2)
-            self.B = np.array([e[1] for e in edges]).reshape(-1, 2)
+            self.frames = list(frames)
             self._C = np.array([f[0] for f in self.frames]).reshape(-1, 2)
             self._HL = np.array([f[1] for f in self.frames])
             self._HW = np.array([f[2] for f in self.frames])
@@ -145,7 +191,7 @@ def make_region_scene():
 
 class FastBrtGatekeeper:
     def __init__(self, profile, unknown: str = "occupied", primitives: str = "faces", alpha: float = 20.0,
-                 horizon: float = 2.0,
+                 placement: str = "centered", cut: bool = True, horizon: float = 2.0,
                  sub_dt: float = 0.05, clearance: "float | None" = None, h_max: "float | None" = None,
                  search: str = "dive", budget: int = 300):
         from fast_brt.dynamics import step_arc
@@ -160,13 +206,18 @@ class FastBrtGatekeeper:
             raise ValueError(f"unknown must be 'occupied' or 'free', got {unknown!r}")
         if primitives not in ("faces", "rings"):
             raise ValueError(f"primitives must be 'faces' or 'rings', got {primitives!r}")
+        if placement not in ("inward", "centered"):
+            raise ValueError(f"placement must be 'inward' or 'centered', got {placement!r}")
+        self.placement = placement
         self.profile, self.units, self.alpha, self.unknown = profile, profile.units, alpha, unknown
         self.primitives = primitives
-        self.obstacles = None                          # ObstacleMap of the last period ("faces")
+        self.obstacles = None                          # ObstacleMap of the last period ("faces"), stable ids
+        self.events = []                               # ObstacleEvents of the last period
+        self.tracker = ObstacleTracker()
         self._step_arc, self._Scene = step_arc, make_region_scene()
         res = profile.map.resolution
         self.clearance = (1.5 * res if clearance is None else clearance) / self.units.length
-        self.max_side_len = max_side_len((res if h_max is None else h_max) / self.units.length, alpha)
+        self.max_side_len = max_side_len((res if h_max is None else h_max) / self.units.length, alpha) if cut else None
         dyn = DubinsHJ(v_range=(1.0, 1.0), w_range=(-1.0, 1.0), role="avoid")
         self.base = BaseValue(GridNP.make((-6.0, 6.0), (-6.0, 6.0), 121, 121, 60), dyn, alpha, horizon, sub_dt)
         V = self.base.slices[-1].astype(float)
@@ -193,14 +244,17 @@ class FastBrtGatekeeper:
             raise RuntimeError("robot is outside the free region")
         rings = [to_m(outer)] + [to_m(h) for h in holes]
         if self.primitives == "rings":
-            edges = [(a, b) for ring in rings for a, b in zip(ring, np.roll(ring, -1, axis=0))]
+            # outer ring counter-clockwise, holes clockwise: the free region is on the left of every edge
+            segments = [(a, b, _left_normal(a, b)) for ring in rings for a, b in zip(ring, np.roll(ring, -1, axis=0))]
         else:
-            self.obstacles = extract_obstacles(grid, offset=r)
-            edges = [(to_m(f.a), to_m(f.b)) for f in self.obstacles.faces]
+            self.obstacles, self.events = self.tracker.update(extract_obstacles(grid, offset=r), res=grid.res)
+            segments = [(to_m(f.a), to_m(f.b), f.normal) for f in self.obstacles.faces]
             if self.unknown == "occupied":
-                edges += [(to_m(e.a), to_m(e.b)) for e in boundary_edges(grid, footprint_radius=r)
-                          if e.kind == "frontier"]
-        return self._Scene(self.base, self.dV, rings, edges, self.alpha, self.clearance, self.max_side_len)
+                safe = safe_free_mask(grid, r)
+                segments += [(to_m(e.a), to_m(e.b), _free_normal(grid, safe, e.a, e.b))
+                             for e in boundary_edges(grid, footprint_radius=r) if e.kind == "frontier"]
+        frames = primitive_frames(segments, self.alpha, self.placement, self.max_side_len)
+        return self._Scene(self.base, self.dV, rings, frames, self.clearance)
 
     def __call__(self, x, w_nom: float, grid) -> np.ndarray:
         """ZOH turn rates (rad / s) for the ``n_sub`` sub-steps of this period."""

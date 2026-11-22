@@ -20,7 +20,7 @@ from pathlib import Path
 
 import numpy as np
 
-from nav_core.mapping import FREE, OCCUPIED, OccupancyGrid, boundary_edges, extract_obstacles, free_region
+from nav_core.mapping import FREE, OCCUPIED, ObstacleTracker, OccupancyGrid, boundary_edges, extract_obstacles, free_region
 from nav_core.nominal import make_nominal
 from nav_core.robots import ROBOTS_DIR, load_profile
 from nav_core.sim import World, run_episode
@@ -38,11 +38,9 @@ def plot(ep, world, profile, goal, path, title, unknown_free=False, n_panels=4):
     idx = np.unique(np.linspace(0, len(snaps) - 1, n_panels).round().astype(int))
     fig, axes = plt.subplots(1, len(idx), figsize=(4.2 * len(idx), 4.4), squeeze=False)
     G = ep.grid
-    g = OccupancyGrid(G.origin, (G.nx * G.res, G.ny * G.res), G.res)
-    ext = [g.origin[0], g.origin[0] + g.nx * g.res, g.origin[1], g.origin[1] + g.ny * g.res]
+    ext = [G.origin[0], G.origin[0] + G.nx * G.res, G.origin[1], G.origin[1] + G.ny * G.res]
     for ax, i in zip(axes[0], idx):
-        t, pose, lo = snaps[i]
-        g.logodds = lo
+        t, pose, g = snaps[i]                     # the map as it was at time t
         st = g.state()
         img = np.full(st.shape, 0.75)
         img[st == FREE], img[st == OCCUPIED] = 1.0, 0.0
@@ -89,6 +87,7 @@ def main():
                     help="gatekeeper: FaST-BRT witness gatekeeper (fast_brt must be importable)")
     ap.add_argument("--unknown", default="occupied", choices=["occupied", "free"],
                     help="gatekeeper: treat unknown space as occupied (frontier edges are obstacles) or free")
+    ap.add_argument("--events", action="store_true", help="print the obstacle detection events")
     ap.add_argument("--out", default="outputs/sim_burger.png")
     args = ap.parse_args()
 
@@ -105,12 +104,17 @@ def main():
         from nav_core.safety import FastBrtGatekeeper
         safety = FastBrtGatekeeper(profile, unknown=args.unknown)
         title = f"{args.nominal} + FaST-BRT gatekeeper, unknown {args.unknown}"
+    tracker = ObstacleTracker() if args.events else None
     ep = run_episode(profile, world, args.x0, args.goal, make_nominal(profile, args.nominal), safety=safety,
-                     t_max=args.t_max, snapshot_every=1.0, noise_std=args.noise, grid=grid)
+                     t_max=args.t_max, snapshot_every=1.0, noise_std=args.noise, grid=grid, tracker=tracker)
     clear = float(world.distance(ep.traj[:, :2]).min() - profile.footprint_radius)
     print(f"{profile.name}, {title}: {ep.status} at t = {ep.t:.2f} s, {len(ep.cmds)} control periods, "
           f"min clearance {clear:.3f} m" + (f", {safety.interventions} interventions" if safety else ""))
+    for e in ep.events:
+        print("  " + e.summary())
     om = extract_obstacles(ep.grid)
+    if tracker is not None:                       # final summary with the tracked (stable) ids
+        om, _ = tracker.update(om, ep.t, ep.grid.res)
     print(f"  {om.n} obstacles, {len(om.faces)} faces, {sum(c.convex for c in om.corners)} convex corners")
     for f in sorted(om.faces, key=lambda f: -f.length):
         if f.length >= 0.1:

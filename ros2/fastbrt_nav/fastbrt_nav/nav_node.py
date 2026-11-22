@@ -17,12 +17,16 @@ Odometry starts at the spawn pose: pass the spawn pose as parameters.
 
 Published for RViz (frame ``world_frame``): ``map`` (nav_msgs/OccupancyGrid)
 and ``fastbrt_markers`` (obstacle faces, convex / concave corners, filter
-region).  ``log_path``: CSV of t, x, y, theta, w_nom, w per period.
+region).  ``obstacle_events`` (std_msgs/String, one JSON object per event):
+obstacle detection events with stable ids (new / updated / merged / split /
+removed), faces with lengths, and corners, in world coordinates.
+``log_path``: CSV of t, x, y, theta, w_nom, w per period.
 """
 
 from __future__ import annotations
 
 import csv
+import json
 import time
 
 import numpy as np
@@ -33,9 +37,10 @@ from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import LaserScan
+from std_msgs.msg import String
 from visualization_msgs.msg import Marker, MarkerArray
 
-from nav_core.mapping import FREE, OCCUPIED, UNKNOWN, OccupancyGrid, extract_obstacles, free_region
+from nav_core.mapping import FREE, OCCUPIED, UNKNOWN, ObstacleTracker, OccupancyGrid, extract_obstacles, free_region
 from nav_core.nominal import make_nominal
 from nav_core.robots import load_profile
 
@@ -84,12 +89,15 @@ class FastBrtNav(Node):
         self.log = []
         self.log_path = g("log_path")
         self.t0 = None
+        self.tracker = ObstacleTracker()          # physical obstacle layer (no footprint offset)
+        self.obstacles = None                     # its ObstacleMap of the last period (stable ids)
 
         self.create_subscription(Odometry, "odom", self.on_odom, 10)
         self.create_subscription(LaserScan, "scan", self.on_scan, qos_profile_sensor_data)
         self.cmd_pub = self.create_publisher(Twist, "cmd_vel", 10)
         self.map_pub = self.create_publisher(OccupancyGridMsg, "map", 1)
         self.marker_pub = self.create_publisher(MarkerArray, "fastbrt_markers", 1)
+        self.event_pub = self.create_publisher(String, "obstacle_events", 10)
         dt = self.profile.ctrl_dt
         n_sub = self.safety.n_sub if self.safety is not None else 1
         self.sub_dt = dt / n_sub
@@ -120,6 +128,10 @@ class FastBrtNav(Node):
         s = self.profile.sensor
         angles, ranges = self.scan
         self.grid.integrate_scan(x, angles, ranges, s.range, s.range_min)
+        self.obstacles, events = self.tracker.update(extract_obstacles(self.grid), self.elapsed(), self.grid.res)
+        for e in events:
+            self.event_pub.publish(String(data=json.dumps(e.to_dict())))
+            self.get_logger().info(e.summary())
         if np.linalg.norm(x[:2] - self.goal) <= self.goal_radius:
             self.finish("reached", f"goal reached at {x[:2].round(3).tolist()}")
             return
@@ -133,10 +145,16 @@ class FastBrtNav(Node):
         w_max = self.profile.phys["w_max"]
         self.queue = [float(np.clip(w, -w_max, w_max)) for w in ws]
         if self.state == "waiting":
-            self.state, self.t0 = "driving", self.get_clock().now().nanoseconds * 1e-9
-        self.log.append((self.get_clock().now().nanoseconds * 1e-9 - self.t0, *x.tolist(), float(w_nom),
-                         self.queue[0], time.perf_counter() - t))
+            self.state = "driving"
+        self.log.append((self.elapsed(), *x.tolist(), float(w_nom), self.queue[0], time.perf_counter() - t))
         self.publish_viz()
+
+    def elapsed(self) -> float:
+        """Seconds since the first control period with odometry and a scan."""
+        now = self.get_clock().now().nanoseconds * 1e-9
+        if self.t0 is None:
+            self.t0 = now
+        return now - self.t0
 
     def on_sub_step(self):
         cmd = Twist()
@@ -177,7 +195,7 @@ class FastBrtNav(Node):
         self.map_pub.publish(m)
 
         r = self.profile.footprint_radius
-        om = getattr(self.safety, "obstacles", None) or extract_obstacles(g)
+        om = self.obstacles                       # physical obstacle layer, stable ids
         outer, holes = free_region(g, self.pose[:2], footprint_radius=r)
         rings = [] if outer is None else [outer] + holes
         arr = MarkerArray()
