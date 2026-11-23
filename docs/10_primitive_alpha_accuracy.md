@@ -1,14 +1,14 @@
 # 10 primitive 的放置、α 与离线求解精度
 
-> 日期：2026-11-21。动力学：恒速 Dubins 3D（v = ω_max = 1，转弯半径 R = 1 模型单位；Burger 上 R = 0.1 m）。
+> 日期：2026-11-21，2026-11-22 更新（离线 `V₀` 接入，默认值切换）。动力学：恒速 Dubins 3D（v = ω_max = 1，转弯半径 R = 1 模型单位；Burger 上 R = 0.1 m）。
 > 文中长度都以 **R** 为单位，这样结论可以直接换算到其他机器人。
 
 ## 10.1 结论
 
 1. **primitive 应该"内移"放置**：矩形朝向自由空间的那条边和检测到的面重合，厚度全部落在障碍内部。这样 BRT 朝自由空间一侧的范围只由面长 L 决定，长面不用再切段。之前以面为中线对称放置、再靠切段压住伸出量，是一个部署偏差。
-2. **离线 `V₀` 的精度比 α 重要得多**。现在在线用的配置（二次编码、一阶格式、121 网格）把面前方的 BRT 平均**低估约 0.22 R**，短面低估超过 40%。推荐 **线性编码 + odp `accuracy="medium"` + 241 网格**，平均误差约 **0.03 R**，最大误差约 0.05 R。离线解一次只要约 6 s。
+2. **离线 `V₀` 的精度比 α 重要得多**。原来在线用的配置（二次编码、一阶格式、121 网格）把面前方的 BRT 平均**低估约 0.22 R**，短面低估超过 40%。改用 **线性编码 + 241 网格**：`accuracy="medium"` 平均误差约 **0.04 R**，`low` 约 **0.09 R**。**现在用的是线性 + low**（2026-11-22 决定）：local update 的 kernel 是一阶格式，进 local update 的 primitive 必须用 `low`，全程只用一份 `V₀`。medium 和二次编码都保留成选项，离线解一次 4–8 s。
 3. **α 推荐 20**。用推荐配置时，α=10 和 α=20 的误差只差约 0.007 R，起决定作用的是"薄墙背面穿出"，而 α=20 更薄。
-4. **闭环（backup filter）对 α 不敏感**，三个场景里 5 个 α 的结果几乎相同。内移放置相比对称 + 切段：碰撞仍为 0，介入率下降，primitive 数减少 60–75%。
+4. **闭环（backup filter）对 α 不敏感**，三个场景里 5 个 α 的结果几乎相同。内移放置相比对称 + 切段：碰撞仍为 0，介入率下降，primitive 数减少 60–75%。对 `V₀` 的精度也不敏感：换成离线导出的线性 `V₀` 以后（low 和 medium 都试过），三个场景的结果和原来完全一样（[11](11_roadmap.md) §11.3）。
 5. **BRS 不能用于避障**。fast-brt 现在的 `TargetSetMode "None"` 算的是 BRS，它在面前方的高度在所有配置下都是 **0**：正对着面冲过去的状态，会被判为安全。避障需要 BRT（`minVWithV0`）。local update 也要跟着改成 BRT，见 [12](12_local_update_brt.md)。
 6. **最短面长**：厚度要有约 2 个 `V₀` 网格格子，即 `L_min ≈ 2·dx·√α`。241 网格、α=20 时约为 0.45 R（Burger 上 4.5 cm）。更短的面在转换时对称延长到 `L_min`，方向是保守的。
 
@@ -22,7 +22,7 @@ c = \frac{a+b}{2} - n\,\frac{L}{2\sqrt{\alpha}}, \qquad
 V_f(x) = V_0\big(g^{-1}x\big) - \text{shift}(L),\ g = (c, \beta)
 $$
 
-`shift(L)` 在二次编码下是 `L²/4`，线性编码下是 `L/2`。代码：`nav_core.safety.primitive_frames(..., placement="inward")`，`FastBrtGatekeeper(placement="inward", cut=False)`。**默认值目前仍是 `centered` + 切段，等离线 `V₀` 接入后再切换。**
+`shift(L)` 在二次编码下是 `L²/4`，线性编码下是 `L/2`。代码：fast-brt 的 `fast_brt.query.PrimitiveV0.place`（内移、短面延长、长面厚度封顶），Robot-Sim 的 `nav_core.safety.place_faces`。**`BackupFilter` 的默认值已经是内移、不切段**；对称 + 切段保留成选项（`placement="centered", cut=True`）。
 
 ![primitives on map](figures/alpha_primitives_on_map.png)
 
@@ -118,12 +118,13 @@ MPPI + backup filter（`unknown="occupied"`），对比对称 + 切段（α=20�
 - **α 几乎不影响结果**：backup filter 的安全靠几何，value 只用来提供一条候选控制。α 真正起作用的地方是 `hj` filter 和 local update，那两者接入后要重测；
 - hj 场景的 11 次超时是 0.4 m 窄缝造成的结构性限制（见 [05 §5.6](05_safety_filter.md)），和 α 无关。
 
-## 10.6 下一步
+## 10.6 下一步（2026-11-22 状态）
 
-1. **fast-brt（`robot-sim` 分支）**：library 的 precompute 增加可选配置 `accuracy` 和 `target_set_mode`（BRT / BRS），默认保持现状；加上 G2（任意长度，`V − shift(L)`）和 G6（点查询）。
-2. **在 mars-14 上**按推荐配置（线性、medium、241、α=20、BRT）precompute 一份 `V₀`。
-3. **Robot-Sim**：adapter 改为加载这份 `V₀`，只保留最后一个时间切片（241 网格约 14 MB，41 个切片约 570 MB），加上短面延长到 `L_min`，再把默认值切换到内移、不切段，重跑批量实验。
-4. **和师妹确认** library 用于避障时应该是 BRT，以及 local update 是否支持 BRT。
+1. ✅ fast-brt：`target_set_mode`（BRT / BRS）、任意长度（`V − shift(L)`）、点查询 `fast_brt.query`、导出命令 `export-v0`（[11](11_roadmap.md) 第 1、2 步）。
+2. ✅ mars-14：四份 `V₀`（线性 / 二次 × low / medium，241 网格、α=20、BRT），只存最后一层，每份 14 MB（第 3 步）。
+3. ✅ Robot-Sim：backup filter 迁到 `nav_core/safety`，加载 `V₀`（默认线性 / low），默认内移、不切段，重跑批量（第 4、5 步）。
+4. 和师妹确认 library 用于避障时应该是 BRT（local update 的 BRT 版本已经做了，见 [12](12_local_update_brt.md)）。
+5. α 对 `hj` filter 和 local update 的影响，等这两者接入后再测。
 
 ## 10.7 复现
 
@@ -131,7 +132,10 @@ MPPI + backup filter（`unknown="occupied"`），对比对称 + 切段（α=20�
 # 精度复核（odp 环境，例如 mars-14）
 cd fast-brt && python experiments/primitive_accuracy.py
 
-# α 实验（laptop；暂时借用 Hu-Hanyang/FaST-BRT 的 numpy 求解器）
+# α 实验（legacy：需要迁移前的 Robot-Sim daac2c4 和 Hu-Hanyang/FaST-BRT 的 numpy 求解器，见脚本说明）
 cd nav_core
 PYTHONPATH=.:<FaST-BRT> python experiments/alpha_study.py {resolution,geometry,closedloop,figures}
+
+# 迁移后的闭环批量（任意 V₀ 文件、放置方式）
+PYTHONPATH=. python experiments/filter_batch.py --v0 ../fast-brt/results/v0/*.npz --placements inward centered+cut
 ```

@@ -1,0 +1,10 @@
+world,range_m,nominal,filter,v0,placement,episodes,reached,collision,timeout,init_failed,other,min_clearance_m,intervention_rate,median_time_to_goal_s,primitives_last,ms_per_step
+occluded,0.3,mppi,none,,,23,19,4,0,0,0,-0.0008,0.0,22.2,0.0,6.3
+occluded,0.5,mppi,none,,,23,21,2,0,0,0,-0.0006,0.0,27.2,0.0,8.3
+occluded,0.8,mppi,none,,,23,19,4,0,0,0,-0.0008,0.0,23.3,0.0,11.2
+occluded,0.3,mppi,"backup, unknown occupied","linear, low, alpha 20",inward,23,0,0,0,23,0,inf,0.0,0.0,9.8,749.4
+occluded,0.3,mppi,"backup, unknown free","linear, low, alpha 20",inward,23,18,2,3,0,0,-0.0023,0.038,21.6,4.7,23.4
+occluded,0.5,mppi,"backup, unknown occupied","linear, low, alpha 20",inward,23,17,0,6,0,0,0.0345,0.076,23.3,29.8,31.9
+occluded,0.5,mppi,"backup, unknown free","linear, low, alpha 20",inward,23,18,0,5,0,0,0.0345,0.059,25.2,9.2,26.6
+occluded,0.8,mppi,"backup, unknown occupied","linear, low, alpha 20",inward,23,16,0,7,0,0,0.0324,0.064,21.6,36.7,34.9
+occluded,0.8,mppi,"backup, unknown free","linear, low, alpha 20",inward,23,16,0,7,0,0,0.0324,0.064,21.6,14.3,30.8

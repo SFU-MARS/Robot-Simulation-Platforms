@@ -154,14 +154,74 @@ loiter circle 需要的自由空间：
 range ≳ footprint_radius + 2 × 转弯半径 + 余量 ≈ 0.34 m（Burger）
 ```
 
-量程 0.3 m 时 26 次实验全部 `init_failed`（机器人不出发，这是安全的失败方式）。
+量程 0.3 m 时遮挡场景 23 次实验全部 `init_failed`（机器人不出发，这是安全的失败方式）。
 
 ## 5.7 失败状态
 
 | 状态 | 触发 | 含义 |
 | --- | --- | --- |
-| `init_failed` | 第一个周期 `commit_initial` 找不到 witness | 起点无法认证，机器人不出发 |
+| `init_failed` | 第一个周期在起点找不到 witness（`backup`、`hj_backup`） | 起点无法认证，机器人不出发 |
 | `filter_error` | 后续周期 filter 抛 `RuntimeError` | 例如机器人跑到 region 外面 |
 | `unsupported` | `NotImplementedError` | filter 不支持的情况（例如非 dubins3d 的 dynamics） |
 
 这三种都**不会悄悄降级**，而是让 episode 停下来并记录原因，避免把"没检查"当成"安全"。
+
+## 5.8 三种 filter mode：`backup`、`hj`、`hj_backup`
+
+代码：`backup` 在 [`backup_filter.py`](../nav_core/nav_core/safety/backup_filter.py)，`hj` 和 `hj_backup` 在 [`hj_filter.py`](../nav_core/nav_core/safety/hj_filter.py)，三者共用 [`scene.py`](../nav_core/nav_core/safety/scene.py)。按名字选：`make_filter(profile, "backup" | "hj" | "hj_backup")`，CLI 和 ROS 参数都是 `filter`。
+
+| mode | 每个周期做什么 | 安全 |
+| --- | --- | --- |
+| `backup` | nominal 走完之后有 witness → 放行；否则执行已提交的 witness | 有保证（几何） |
+| `hj` | 预测 nominal 这一周期的 n_sub 个子步，**距离余量**都大于 `margin` → 放行；否则执行最近那个 primitive 的 `u* = w_max·sign(∂V/∂θ)`（每个子步重新查询） | **没有保证** |
+| `hj_backup` | 先按 `hj` 得到这一周期的候选控制（nominal 或 `u*`），再交给 backup：候选走完之后有 witness → 执行候选；否则执行已提交的 witness | 有保证（backup 兜底） |
+
+**距离余量**（`Scene.hj_margin`，fast-brt 的 `PrimitiveV0.margin`）：每个面的值先换回线性编码（二次编码用 `z = (√(L²+4V) − L)/2`），再除以 `max(1, √α)`，单位是长度。线性编码的 ℓ 在位置上是 √α-Lipschitz 的；同一控制下，从两个只差一个平移的状态出发，轨迹也只差这个平移，所以 V 也是 √α-Lipschitz 的。于是余量 d 表示：同朝向、位置偏差 d 以内的状态都在 BRT 外。两种编码含义相同，`margin` 用米给。
+
+- `hj` 只看 primitive，**不构造 region**（离开 region 不会中止 run，一直走到真正碰撞）；`unknown="occupied"` 时 frontier 边也是 primitive。默认 `margin = 0`（经典 HJ filter）。
+- `robust=True`：余量再加上 clearance（1.5 格）和子步之间的采样间隙 `(v + v·T·ω_max)·dt/2`（`|∂V/∂θ| ≤ √α·v·T`：同一控制下转过 Δθ 的初始朝向给出转过 Δθ 的轨迹）。Burger 上是 3 cm + 7.5 mm。
+- `hj_backup` 的 `margin` 必须大于 0（默认 2 cm，约 0.2 R）：`U ≤ 0` 的状态一定没有 witness，backup 要求能放下 loiter circle，比 BRT 保守得多，所以 `margin = 0` 时总是 backup 先介入，`hj_backup` 和 `backup` 完全一样。
+
+Burger 默认场景（pursuit，(−0.8, −0.8, 0.2) → (0.7, 0.2)）的余量扫描（`hj`：结果、介入次数、最小距离；`hj_backup`：结果、HJ 介入 / backup 介入、最小距离）：
+
+| margin | `hj` | `hj` + robust | `hj_backup` | `hj_backup` + robust |
+| --- | --- | --- | --- | --- |
+| 0 | 到达，8，1.3 cm | **碰撞**，55 | 到达，0 / 10，4.3 cm（= `backup`） | 到达，53 / 14 |
+| 1 cm | 到达，33，1.4 cm | 超时，117 | 到达，20 / 16 | 超时，105 / 12 |
+| 2 cm | 到达，48，1.3 cm | 超时，123 | 到达，24 / 17（默认） | 到达，98 / 7 |
+| 5 cm | 超时，115 | 超时，137 | 到达，83 / 19 | 到达，106 / 10 |
+| 10 cm | 超时，139 | 超时，142 | 到达，109 / 9 | 超时，132 / 10 |
+
+`hj_backup` 在所有设置下都没有碰撞，余量越大 HJ 越早介入，太大时会超时。`hj` 的余量加大**不会变安全**：它一直处在逃逸模式里，`u*` 只顾最近的面，在拐角处被困住（下面的诊断）。
+
+批量对比（`experiments/filter_batch.py --filters backup hj hj_backup --nominals pursuit mppi`，unknown occupied，默认 `V₀`，默认 margin，2026-11-22），到达 / 碰撞 / 超时，括号里是介入率；原始数据 [`figures/batch_filter_modes.csv`](figures/batch_filter_modes.csv)：
+
+| 场景 | nominal | `backup` | `hj` | `hj_backup`（margin 2 cm） |
+| --- | --- | --- | --- | --- |
+| hj（27 次） | pursuit | 16 / 0 / 11（0.24） | 17 / **10** / 0（0.19） | 15 / 0 / 12（0.47） |
+| | MPPI | 16 / 0 / 11（0.049） | 20 / **7** / 0（0.043） | 16 / 0 / 11（0.29） |
+| 柱子（28 次） | pursuit | 28 / 0 / 0（0.057） | 28 / 0 / 0（0.051），最小距离 0.3 cm | 28 / 0 / 0（0.16） |
+| | MPPI | 28 / 0 / 0（0.004） | 28 / 0 / 0（0.0） | 28 / 0 / 0（0.13） |
+| 遮挡（23 次） | pursuit | — | 18 / **5** / 0（0.15） | 16 / 0 / 7（0.42） |
+| | MPPI | 16 / 0 / 7（0.064） | 19 / **4** / 0（0.024） | 14 / 0 / 9（0.37） |
+
+- **`hj` 会撞**：hj 和遮挡场景都有碰撞，柱子场景（只有一个孤立障碍，没有拐角）没有。它从不超时，也最快（6–20 ms/step，backup 19–35 ms）。这就是 local update 要修的情况。
+- **`hj_backup` 和 `backup` 一样安全**：三个场景都没有碰撞，到达数和 `backup` 接近（遮挡场景 MPPI 少 2 次）。介入率高（0.13–0.47），因为 HJ 在 BRT 外 2 cm 就开始避让，每次 HJ 逃逸都算一次介入。
+- 以后接上 local update，`hj` 的碰撞应该消失，`hj_backup` 的 HJ 介入会更准，这是下一组对比实验。
+
+### `hj` 为什么会撞（`experiments/hj_failures.py`）
+
+对 MPPI + `hj` 在 hj 和遮挡场景里的每次碰撞，找出机器人**进入真实 BRT** 的那个周期（从那以后，任何控制在 T = 2 内都会撞；用 315 条 rollout 检查：先保持 w₁ 走 k 步再换 w₂，精确圆弧），在那个状态上看：
+
+| 分类 | 判据 | margin 0 | margin 0 + robust |
+| --- | --- | --- | --- |
+| **leaking corner** | `U > 0`，而且**每个面单独**（只有它的矩形）都还能逃，但合在一起逃不掉 | **9** | **27** |
+| 单个面（`V₀` 算小了） | `U > 0`，但某一个面单独就已经逃不掉 | 1（`U = +0.051`） | 0 |
+| filter 已经知道 | `U ≤ 0`，逃逸来得太晚 | 1 | 1 |
+
+- 进入真实 BRT 的时候，`U` 大多在 +0.05 到 +1.8 之间（robust 时 +0.2 到 +2.8），filter 认为安全；之后 4–12 个周期（0.8–2.4 s）才撞上；
+- 进入之后"最近的面"在 2–6 个面之间切换：机器人卡在拐角里，`u*` 每次只躲最近的那个面；
+- robust 让 `hj` 更早、更久地处在逃逸模式里，失败从 11 次变成 28 次，几乎全是拐角；
+- 所以 `hj` 碰撞的主因是**并集 `min_i V_i` 在拐角处漏，加上只躲最近的面**，不是 `V₀` 的精度，也不是余量不够。这正是 local update 要修的：在拐角附近重算 value，让 `U` 在进入真实 BRT 之前就变成负的。
+
+"逃不掉"用的是有限条 rollout，是下界（漏掉的逃路会算成逃不掉），但每个面单独"能逃"是找到了具体的逃路，所以"每个面单独都能逃"这一条是可靠的。

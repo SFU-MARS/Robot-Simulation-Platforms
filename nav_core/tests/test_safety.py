@@ -63,7 +63,8 @@ def test_backup_filter_loads_the_profile_v0(v0):
 
 def test_backup_filter_rejects_a_missing_or_wrong_v0(tmp_path, fake_v0):
     import dataclasses
-    from fast_brt.query import PrimitiveV0
+    from nav_core.safety.scene import import_query
+    PrimitiveV0 = import_query().PrimitiveV0
     from nav_core.safety import BackupFilter
     p = load_profile("burger")
     with pytest.raises(FileNotFoundError, match="export-v0"):
@@ -136,7 +137,7 @@ def test_inward_rectangles_stay_behind_the_faces(fake_v0):
     side of the region boundary, and its front edge reaches at most two cells into the
     free region (faces are enclosing, so they sit slightly outside the region contour)."""
     from nav_core.safety import BackupFilter
-    from nav_core.safety.backup_filter import _contains
+    from nav_core.safety.scene import _contains
     p, g = scanned(PILLAR, AROUND)
     gate = BackupFilter(p, fake_v0)
     scene = gate.scene(np.array([0.5, 0.5, 0.0]), g)
@@ -155,3 +156,109 @@ def test_inward_rectangles_stay_behind_the_faces(fake_v0):
         front, back = sorted(region_sd(np.array([np.asarray(c) + hw * nrm, np.asarray(c) - hw * nrm])), reverse=True)
         assert front <= 2 * cell
         assert back <= 0.0
+
+
+def test_hj_filter_avoids_the_collision(v0):
+    from nav_core.safety import HJFilter
+    p = load_profile("burger")
+    w = World.from_sdf(WORLD, plane_z=p.sensor.height)
+    gate = HJFilter(p, v0)
+    ep = run_episode(p, w, (-0.8, -0.8, 0.2), (0.7, 0.2), make_nominal(p), safety=gate, t_max=30.0)
+    assert ep.status == "reached"                              # pursuit alone collides (test_sim)
+    assert gate.interventions > 0
+    assert w.distance(ep.traj[:, :2]).min() > p.footprint_radius
+
+
+def test_hj_filter_turns_away_only_inside_the_brt(v0):
+    """Heading straight at the east wall (its face at about 0.87 m with the footprint): 1.7 turning radii away the
+    nominal rate passes, 0.7 radii away (inside the BRT, which reaches 1 radius in front of a face) it turns hard."""
+    from nav_core.safety import HJFilter, make_filter
+    p, g = scanned(World(ROOM), [(0.0, 0.0, 0.0)])
+    gate = make_filter(p, "hj", v0)
+    assert isinstance(gate, HJFilter) and make_filter(p, "none") is None
+    far = gate(np.array([0.70, 0.0, 0.0]), 0.0, g)
+    assert np.all(far == 0.0) and gate.interventions == 0
+    near = gate(np.array([0.80, 0.0, 0.0]), 0.0, g)
+    assert gate.interventions == 1 and np.all(np.abs(near) == p.phys["w_max"])
+    with pytest.raises(ValueError, match="filter must be"):
+        make_filter(p, "leaky", v0)
+
+
+def test_hj_backup_filter_avoids_the_collision(v0):
+    from nav_core.safety import HJBackupFilter
+    p = load_profile("burger")
+    w = World.from_sdf(WORLD, plane_z=p.sensor.height)
+    gate = HJBackupFilter(p, v0)
+    ep = run_episode(p, w, (-0.8, -0.8, 0.2), (0.7, 0.2), make_nominal(p), safety=gate, t_max=30.0)
+    assert ep.status == "reached"
+    assert gate.hj_interventions > 0                            # the HJ evasion shaped the run (margin 2 cm)
+    assert gate.interventions == gate.hj_interventions + gate.backup_interventions
+    assert w.distance(ep.traj[:, :2]).min() > p.footprint_radius
+
+
+def test_hj_backup_falls_back_on_the_witness(v0):
+    """Proposed rates that leave no witness are replaced by the committed plan, whatever the HJ filter says."""
+    from nav_core.safety import HJBackupFilter
+    p, g = scanned(World(ROOM), [(0.0, 0.0, 0.0)])
+    gate = HJBackupFilter(p, v0, margin=-1e9)                  # the HJ filter never evades: nominal is proposed
+    gate(np.array([0.0, 0.0, 0.0]), 0.0, g)                    # commits a witness at the start
+    plan = gate.plan[:gate.n_sub].copy()
+    ws = gate(np.array([0.75, 0.0, 0.0]), 0.0, g)              # straight at the wall: no witness after it
+    assert gate.backup_interventions == 1 and gate.hj_interventions == 0
+    assert ws == pytest.approx(gate.units.rate_to_phys(plan))
+
+
+def test_hj_margin_is_a_distance(v0):
+    """Scene.hj_margin: about the distance to the BRT in front of a face (V / sqrt(alpha)); the HJ filter's margin is
+    in metres, robust adds the clearance and the sampling gap"""
+    from nav_core.safety import HJFilter, Scene, place_faces
+    faces = place_faces(v0, [(np.array([-3.0, 0.0]), np.array([3.0, 0.0]), np.array([0.0, 1.0]))])
+    scene = Scene(v0, faces, None, clearance=0.3, horizon=2.0)
+    heights = np.array([1.5, 2.0, 3.0])                           # heading at the face; the BRT ends at about 1 R
+    m = scene.hj_margin(np.c_[np.zeros(3), heights, np.full(3, -np.pi / 2)])
+    assert np.all(np.diff(m) > 0) and m[0] > 0
+    assert np.all(m <= heights - 0.9) and np.all(m >= heights - 1.3)
+    p = load_profile("burger")
+    plain, robust = HJFilter(p, v0, margin=0.02), HJFilter(p, v0, margin=0.02, robust=True)
+    assert plain.margin_model == pytest.approx(0.2)                # 2 cm = 0.2 turning radii
+    assert robust.margin_model == pytest.approx(0.2 + 0.3 + 3 * 0.05 / 2)
+
+
+def test_hj_filter_needs_no_region(v0):
+    """Outside the free region (e.g. grazing an obstacle) the HJ filter keeps going; the backup filter stops."""
+    from nav_core.safety import BackupFilter, HJFilter
+    p, g = scanned(World(ROOM), [(0.0, 0.0, 0.0)])
+    outside = np.array([0.95, 0.0, 0.0])                          # closer to the east wall than the footprint
+    HJFilter(p, v0)(outside, 0.0, g)
+    with pytest.raises(RuntimeError, match="outside the free region"):
+        BackupFilter(p, v0).scene(outside, g)
+
+
+def test_v0_path_from_the_environment_and_the_profile_root(v0, monkeypatch, tmp_path):
+    import dataclasses
+    from nav_core.safety import BackupFilter
+    from nav_core.safety.scene import V0_ENV
+    p = load_profile("burger")
+    assert p.root == ROBOTS_DIR.parent
+    monkeypatch.setenv(V0_ENV, str(tmp_path / "elsewhere.npz"))
+    with pytest.raises(FileNotFoundError, match="elsewhere"):
+        BackupFilter(p)                                            # the environment variable wins
+    monkeypatch.delenv(V0_ENV)
+    with pytest.raises(FileNotFoundError, match=str(tmp_path)):
+        BackupFilter(dataclasses.replace(p, root=tmp_path))       # relative base_value starts at the profile root
+
+
+def test_v0_checksum_from_the_release_manifest(tmp_path):
+    """A V0 listed in robots/v0_release.yaml must match its sha256; unlisted files are not checked"""
+    import hashlib
+    from nav_core.safety.scene import check_v0
+    good, bad, other = tmp_path / "v0_a.npz", tmp_path / "v0_b.npz", tmp_path / "v0_c.npz"
+    for f, data in ((good, b"one"), (bad, b"two"), (other, b"three")):
+        f.write_bytes(data)
+    manifest = tmp_path / "v0_release.yaml"
+    manifest.write_text(f"files:\n  v0_a.npz: {hashlib.sha256(b'one').hexdigest()}\n"
+                        f"  v0_b.npz: {hashlib.sha256(b'changed').hexdigest()}\n")
+    check_v0(good, manifest)
+    check_v0(other, manifest)
+    with pytest.raises(ValueError, match="sha256"):
+        check_v0(bad, manifest)

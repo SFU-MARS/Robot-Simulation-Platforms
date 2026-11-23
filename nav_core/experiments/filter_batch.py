@@ -1,13 +1,18 @@
 """
-Closed-loop batches of MPPI + backup filter (Burger, unknown occupied) in three worlds, for comparing V0 files
-(encoding, scheme accuracy, alpha) and placements.  The worlds, starts, goals and metrics are those of
-docs/10 section 10.5 (experiments/alpha_study.py closedloop).
+Closed-loop batches of the Burger in three worlds, for comparing nominal controllers, the filters (backup, hj, hj_backup)
+and their modes, V0 files (encoding, scheme accuracy, alpha), placements and LiDAR ranges.  The worlds, starts,
+goals and metrics are those of docs/10 section 10.5 (experiments/alpha_study.py closedloop); every combination
+of the options below is run.
 
     cd nav_core
-    PYTHONPATH=. python experiments/filter_batch.py                                    # the profile's V0
+    PYTHONPATH=. python experiments/filter_batch.py                                    # MPPI + backup, the profile's V0
     PYTHONPATH=. python experiments/filter_batch.py --v0 ../fast-brt/results/v0/v0_dubins_3d_linear_alpha20_low.npz \\
         ../fast-brt/results/v0/v0_dubins_3d_quadratic_alpha20_low.npz
     PYTHONPATH=. python experiments/filter_batch.py --placements inward centered+cut --worlds hj
+    PYTHONPATH=. python experiments/filter_batch.py --nominals pursuit mppi --filters none backup --unknowns occupied free
+    PYTHONPATH=. python experiments/filter_batch.py --filters backup hj hj_backup
+    PYTHONPATH=. python experiments/filter_batch.py --worlds occluded --ranges 0.3 0.5 0.8 --filters none backup \\
+        --unknowns occupied free
 
 Writes outputs/filter_batch.csv (--out).
 """
@@ -17,6 +22,7 @@ from __future__ import annotations
 import argparse
 import collections
 import csv
+import dataclasses
 import time
 from pathlib import Path
 
@@ -25,7 +31,7 @@ import numpy as np
 from nav_core.mapping import OccupancyGrid
 from nav_core.nominal import make_nominal
 from nav_core.robots import ROBOTS_DIR, load_profile
-from nav_core.safety import BackupFilter, load_v0
+from nav_core.safety import load_v0, make_filter
 from nav_core.sim import Box, World, run_episode
 
 PLACEMENTS = {"inward": dict(placement="inward", cut=False), "centered+cut": dict(placement="centered", cut=True)}
@@ -58,26 +64,28 @@ def cases(world, profile, seed=1):
     return [(x0, g) for x0 in starts for g in goals if np.linalg.norm(x0[:2] - g) > 0.4]
 
 
-def run(profile, world, v0, kw, unknown="occupied", t_max=100.0):
+def run(profile, world, v0, kw, unknown="occupied", nominal="mppi", kind="backup", t_max=100.0):
+    """One batch with filter ``kind`` (backup | hj | hj_backup | none); v0 and kw (placement) are ignored without a filter."""
     c, clr, interv, prims, t_goal, steps, t0 = collections.Counter(), np.inf, [], [], [], 0, time.perf_counter()
     todo = cases(world, profile)
     for i, (x0, goal) in enumerate(todo):
-        gate = BackupFilter(profile, v0, unknown=unknown, **kw)
+        gate = make_filter(profile, kind, v0, unknown=unknown, **(kw if kind != "none" else {}))
         grid = None if world["grid"] is None else OccupancyGrid(*world["grid"], profile.map.resolution)
-        ep = run_episode(profile, world["w"], x0, goal, make_nominal(profile, "mppi", seed=i), safety=gate,
-                         t_max=t_max, seed=i, grid=grid)
+        nom = make_nominal(profile, nominal, **({"seed": i} if nominal == "mppi" else {}))
+        ep = run_episode(profile, world["w"], x0, goal, nom, safety=gate, t_max=t_max, seed=i, grid=grid)
         c[ep.status] += 1
         steps += len(ep.cmds)
         if ep.status == "reached":
             t_goal.append(ep.t)
         if len(ep.traj) > 1:
             clr = min(clr, float(world["w"].distance(ep.traj[:, :2]).min() - profile.footprint_radius))
-        if gate.steps:
+        if gate is not None and gate.steps:
             interv.append(gate.interventions / gate.steps)
-        if gate.model is not None:
+        if gate is not None and gate.model is not None:
             prims.append(len(gate.model.frames))
     return {"episodes": len(todo), "reached": c["reached"], "collision": c["collision"], "timeout": c["timeout"],
-            "other": len(todo) - c["reached"] - c["collision"] - c["timeout"],
+            "init_failed": c["init_failed"],
+            "other": len(todo) - c["reached"] - c["collision"] - c["timeout"] - c["init_failed"],
             "min_clearance_m": round(clr, 4), "intervention_rate": round(float(np.mean(interv)) if interv else 0.0, 3),
             "median_time_to_goal_s": round(float(np.median(t_goal)) if t_goal else 0.0, 1),
             "primitives_last": round(float(np.mean(prims)) if prims else 0.0, 1),
@@ -89,22 +97,33 @@ def main():
     ap.add_argument("--v0", nargs="+", default=None, help="V0 files (default: the profile's base_value)")
     ap.add_argument("--placements", nargs="+", default=["inward"], choices=list(PLACEMENTS))
     ap.add_argument("--worlds", nargs="+", default=["hj", "pillar", "occluded"], choices=["hj", "pillar", "occluded"])
-    ap.add_argument("--unknown", default="occupied", choices=["occupied", "free"])
+    ap.add_argument("--unknowns", nargs="+", default=["occupied"], choices=["occupied", "free"])
+    ap.add_argument("--nominals", nargs="+", default=["mppi"], choices=["mppi", "pursuit"])
+    ap.add_argument("--filters", nargs="+", default=["backup"], choices=["backup", "hj", "hj_backup", "none"])
+    ap.add_argument("--ranges", nargs="+", type=float, default=[None],
+                    help="LiDAR ranges (m) instead of the profile's")
     ap.add_argument("--out", default=str(Path(__file__).resolve().parents[1] / "outputs" / "filter_batch.csv"))
     args = ap.parse_args()
 
-    profile = load_profile("burger")
-    all_worlds = worlds(profile)
+    base = load_profile("burger")
+    all_worlds = worlds(base)
+    v0s = [load_v0(path) for path in args.v0 or [base.base_value]]
+    # without the filter, the V0, placement and mode do not matter: one batch per world, nominal and range
+    combos = [(w, r, n, "none", None, None, None) for w in args.worlds for r in args.ranges for n in args.nominals
+              if "none" in args.filters]
+    combos += [(w, r, n, f, v0, pl, u) for w in args.worlds for r in args.ranges for n in args.nominals
+               for f in args.filters if f != "none" for v0 in v0s for pl in args.placements for u in args.unknowns]
     rows = []
-    for path in args.v0 or [profile.base_value]:
-        v0 = load_v0(path)
-        name = f"{v0.encoding}, {v0.meta.get('accuracy', '?')}, alpha {v0.alpha:g}"
-        for wname in args.worlds:
-            for placement in args.placements:
-                row = {"world": wname, "v0": name, "placement": placement,
-                       **run(profile, all_worlds[wname], v0, PLACEMENTS[placement], args.unknown)}
-                rows.append(row)
-                print(" | ".join(f"{k} {v}" for k, v in row.items()), flush=True)
+    for wname, lidar, nominal, kind, v0, placement, unknown in combos:
+        profile = base if lidar is None else dataclasses.replace(base, sensor=dataclasses.replace(base.sensor, range=lidar))
+        row = {"world": wname, "range_m": profile.sensor.range, "nominal": nominal,
+               "filter": "none" if v0 is None else f"{kind}, unknown {unknown}",
+               "v0": "" if v0 is None else f"{v0.encoding}, {v0.meta.get('accuracy', '?')}, alpha {v0.alpha:g}",
+               "placement": "" if v0 is None else placement,
+               **run(profile, all_worlds[wname], v0, PLACEMENTS.get(placement, {}), unknown or "occupied", nominal,
+                     kind)}
+        rows.append(row)
+        print(" | ".join(f"{k} {v}" for k, v in row.items()), flush=True)
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w", newline="") as f:

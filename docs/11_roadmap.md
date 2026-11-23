@@ -18,7 +18,7 @@
 | 精度和 local update | 要进 local update 的 primitive **只能用 `low`**（kernel 是一阶格式）；`medium` 的 `V₀` 只用于点查询，暂时不用于 local update；要用二阶得改 kernel | [05 §5.3](05_safety_filter.md) |
 | 短面             | 短于`L_min ≈ 2·dx·√α`（约 0.45 R）的面，对称延长到 `L_min`                                                                                                    | [10 §10.1](10_primitive_alpha_accuracy.md) |
 | primitive 用 BRT | BRS 在面前方的高度为 0，不能用于避障                                                                                                                                   | [10 §10.3](10_primitive_alpha_accuracy.md) |
-| filter           | 三种都保留为选项：`hj`（经典 HJ filter）、`backup`（后路验证，原 witness gatekeeper）、`hj_backup`                                                               | [05](05_safety_filter.md)                   |
+| filter           | 三种都保留为选项：`hj`（经典 HJ filter）、`backup`（后路验证，原 witness gatekeeper）、`hj_backup`（**HJ 为主、backup 兜底**：HJ 给出这一周期的候选控制，backup 检查走完后有没有 witness，2026-11-22 决定） | [05 §5.8](05_safety_filter.md)                   |
 | 3D 动力学        | 先做恒速 Dubins3D，参数以后再扫；4D 一定要做                                                                                                                           | —                                         |
 | 地图             | 计数模型（τ=0.2）+ 擦边保护                                                                                                                                           | [03](03_mapping.md)                         |
 | 障碍             | 连在一起的算一个；面 = 包裹直线；稳定 ID + 事件                                                                                                                        | [03](03_mapping.md)                         |
@@ -61,7 +61,7 @@
 
     L ≤ 4 的平均值和 [10 §10.3](10_primitive_alpha_accuracy.md) 的表一致。默认用线性 / low：和 local update 的一阶格式一致，代价是前沿平均多低估约 0.05 R（Burger 上 5 mm）。
 
-- **Robot-Sim（未提交）：第 4 步**
+- **Robot-Sim（`4a60ff5`）：第 4 步**
   - `nav_core/safety/backup_filter.py`：`BackupFilter`（原 `FastBrtGatekeeper`）、`Scene`（原 `RegionScene`）、`place_faces`、`load_v0`；`nav_core/safety/witness.py`：`find_witness`（只迁了实际在用的 dive 搜索，B&B / prefix / deadline 没迁）和精确圆弧积分 `arc_step`；旧的 `fastbrt_gatekeeper.py` 删掉了；
   - HJ 项改用 `fast_brt.query.PrimitiveV0`，`V₀` 从 profile 的 `base_value` 读（`robots/burger.yaml` 指向 `fast-brt/results/v0/v0_dubins_3d_linear_alpha20_low.npz`，文件不进 git）；`fast_brt` 从 PYTHONPATH 或 `fast-brt/` 子模块导入，旧仓库误放在 PYTHONPATH 上时报错；
   - 默认值已经是**内移、不切段**（新 `V₀` 只有内移的放置，`centered` + `cut` 保留成选项）；filter 的名字在 CLI / ROS 参数里从 `gatekeeper` 改成 `backup`，ROS 节点多了 `v0` 参数；
@@ -85,6 +85,18 @@
 
     换成默认的线性 / low `V₀` 后重跑（`experiments/filter_batch.py`）：三个场景的到达 / 碰撞 / 超时、介入率、primitive 数和最小距离都和 medium **完全相同**（hj 16 / 0 / 11、0.049；柱子 28 / 0 / 0、0.004；遮挡 16 / 0 / 7、0.064），ms/step 19.7 / 21.0 / 34.0。
 
+- **Robot-Sim（未提交）：第 5 步**
+  - 默认值：内移、不切段、`V₀` = 线性 / low（`robots/burger.yaml`）；
+  - 用新默认值重跑了 README 和 doc 04 里的三组批量（`experiments/filter_batch.py`，原来的脚本没进仓库，用例集合换成了 doc 10 的那套），原始数据在 `docs/figures/batch_*.csv`：两种 unknown 模式和两种 nominal 加 backup filter 都没有碰撞；遮挡场景量程 0.3 m 时 `unknown=occupied` 不出发、`unknown=free` 撞 2 次，0.5 / 0.8 m 两种模式都安全；结论和原来一样；
+  - doc 10 的结论（推荐配置、默认值、下一步）、doc 04 / 05 的数字、README 的三张表都已更新。
+
+- **Robot-Sim + fast-brt：review 后的修正（2026-11-22）**
+  - `hj` 不再构造 region（只用 primitive），离开 region 不再中止 run：以前的"擦边"现在会走到真正的碰撞，统计更干净；
+  - 阈值改成**距离余量** `margin`（米）：fast-brt 的 `PrimitiveV0.margin` 把每个面的值换回线性编码再除以 `max(1, √α)`（V 在位置上是 √α-Lipschitz 的，所以余量 d 表示同朝向 d 以内的状态都在 BRT 外），两种编码含义相同；`hj` 默认 0，`hj_backup` 默认 2 cm；
+  - `robust=True`：余量再加上 clearance（1.5 格）和子步之间的采样间隙 `(v + v·T·ω_max)·dt/2`（`|∂V/∂θ| ≤ √α·v·T`）；
+  - V₀ 路径：`base_value` 相对 profile 所在仓库（`profile.root`）解析，环境变量 `ROBOT_SIM_V0` 可以覆盖；测试 fixture 不再依赖导入顺序（`import_query`）；
+  - V₀ 文件改为 **GitHub release** 存放：`robots/v0_release.yaml` 记 tag 和 sha256，`nav_core/scripts/fetch_v0.py` 下载并校验，加载登记过的文件时校验 sha256；CI 设 `NAV_CORE_REQUIRE_V0=1` 时缺 V₀ 直接失败。
+
 ## 11.4 进行中（下一步，已同意）
 
 | # | 任务                                                                                                                                                                       | 在哪      | 依赖 |
@@ -93,13 +105,13 @@
 | 2 | ✅ **在线点查询**（纯 numpy，不 import odp）：长度平移、内移放置、短面延长、`V`、`∂V/∂θ`、`u*`                                                                 | fast-brt  | —   |
 | 3 | ✅ **在 mars-14 上导出推荐配置的 `V₀`**：`python -m fast_brt export-v0 --config configs/v0_dubins_3d.json`，先跑 `pytest -m slow -s -k direct_solve`                                                                                                                            | mars-14   | 1    |
 | 4 | ✅ **把 backup filter 从 FaST-BRT 迁到 Robot-Sim**（`nav_core/safety`），改名 `BackupFilter`；HJ 项改用第 2 步的点查询。两个包都叫 `fast_brt`，不迁移就没法同时用 | Robot-Sim | 2    |
-| 5 | **切换默认值**（内移、不切段、加载 `V₀` 文件），重跑批量实验，更新文档                                                                                            | Robot-Sim | 3、4 |
+| 5 | ✅ **切换默认值**（内移、不切段、加载 `V₀` 文件），重跑批量实验，更新文档                                                                                            | Robot-Sim | 3、4 |
 
 ## 11.5 待办
 
 **filter 和 local update**
 
-- [ ] `hj` 和 `hj_backup` 两种 filter mode（`hj` 最简单）；
+- [X] `hj` 和 `hj_backup` 两种 filter mode（`nav_core/safety/hj_filter.py`，2026-11-22）：`hj_backup` = HJ 为主、backup 兜底，`margin` 必须 > 0（默认 2 cm），见 [05 §5.8](05_safety_filter.md)；批量对比（margin 改成距离、`hj` 不再构造 region 后重跑）：`hj` 在有拐角的场景（hj、遮挡）里有 4–10 次碰撞，从不超时；`hj_backup` 三个场景都没有碰撞，到达数和 `backup` 接近，介入率高（0.13–0.47，HJ 提前避让）。诊断（`experiments/hj_failures.py`）：11 次碰撞里 9 次是 leaking corner，1 次单个面 `V₀` 低估，1 次 `U ≤ 0` 后逃逸太晚；`robust` 反而让失败变成 28 次（27 次拐角）；`hj_backup` 三个场景都没有碰撞，到达数和 `backup` 基本相同，介入率高（0.17–0.48，HJ 提前避让）；
 - [X] local update 的 BRT 版本（HJ_local_update `robot-sim` 分支，`brt=True`）：每个被更新的点再取 `min(V, V(t=0))`；numpy 版在本地验证过，和整体 BRT 求解**符号完全一致**（L 形两条线：并集漏 74 格，local update 后 0 格）；fast-brt 新增 `target_set_mode="brt"` 和 `local_update_impl="numpy"`。原因和改动见 [12](12_local_update_brt.md)；
 - [ ] 在 mars-14 上验证 HeteroCL 版的 BRT local update，并测实时性（`pytest -m slow -k tube`、`experiments/local_update_timing.py`）；
 - [ ] local update 目前只能用一阶格式（和 primitive library 的格式必须一致，否则修正区域会扩张到整张网格）；要用二阶，得改 kernel（ENO2 + RK2）；

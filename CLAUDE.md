@@ -25,7 +25,7 @@ Robots:
 - **Ownership.**
   - Dynamics (4D, 6D) are owned by a labmate.
   - In `HJ_local_update` the new behaviour must stay opt-in (for example `brt=False` by default). Check every change against a direct solve.
-- **Offline V0.** The backup filter (`nav_core/safety/backup_filter.py`) reads the robot's offline V₀ (`base_value` in `robots/<name>.yaml`, exported with `python -m fast_brt export-v0` on mars-14; not in git, kept in `fast-brt/results/v0/`) through fast-brt's numpy-only `fast_brt.query`, imported from `PYTHONPATH` or the `fast-brt/` submodule. The old `Hu-Hanyang/FaST-BRT` is retired; never put it on `PYTHONPATH` (same package name).
+- **Offline V0.** The backup filter (`nav_core/safety/backup_filter.py`) reads the robot's offline V₀ (`base_value` in `robots/<name>.yaml`, exported with `python -m fast_brt export-v0` on mars-14; not in git: assets of a GitHub release, listed with sha256 in `robots/v0_release.yaml`, fetched into `fast-brt/results/v0/` by `nav_core/scripts/fetch_v0.py`; a new V₀ gets a new release tag) through fast-brt's numpy-only `fast_brt.query`, imported from `PYTHONPATH` or the `fast-brt/` submodule. The old `Hu-Hanyang/FaST-BRT` is retired; never put it on `PYTHONPATH` (same package name).
 
 ## Git rules
 
@@ -54,7 +54,8 @@ Robots:
 
 ```bash
 cd nav_core
-PYTHONPATH=. python -m pytest -q tests                                  # nav_core tests (closed-loop filter tests skip without the V0 file)
+python scripts/fetch_v0.py                                             # download the V0 files (GitHub release)
+PYTHONPATH=. python -m pytest -q tests                                  # nav_core tests (closed-loop filter tests skip without the V0 file; NAV_CORE_REQUIRE_V0=1 makes them fail)
 PYTHONPATH=. python scripts/run_sim.py --nominal mppi                   # ROS-free closed loop
 PYTHONPATH=. python scripts/run_sim.py --nominal mppi --filter backup
 

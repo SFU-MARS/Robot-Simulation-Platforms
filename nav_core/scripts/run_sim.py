@@ -1,14 +1,15 @@
 """
 ROS-free closed-loop run of one robot profile in a Gazebo SDF world, with the
-nominal controller alone or behind the backup filter.  Prints the outcome
+nominal controller alone or behind a safety filter (backup, hj or hj_backup).  Prints the outcome
 and the estimated obstacle sides, and plots map snapshots (with the free
-polygon the filter uses).  The backup filter reads the profile's V0
+polygon the filter uses).  The filters read the profile's V0
 (``base_value``) with fast-brt's ``fast_brt.query`` (the fast-brt submodule is
 found without PYTHONPATH).
 
     cd nav_core
     PYTHONPATH=. python scripts/run_sim.py                                   # nominal only
     PYTHONPATH=. python scripts/run_sim.py --filter backup
+    PYTHONPATH=. python scripts/run_sim.py --nominal mppi --filter hj                # classic HJ filter
     PYTHONPATH=. python scripts/run_sim.py --goal 0.7 0.2 --x0 -0.8 -0.8 0.2 --out outputs/sim_burger.png
     PYTHONPATH=. python scripts/run_sim.py --nominal mppi --filter backup \
         --world ../turtlebot3/turtlebot3_controls/worlds/occluded_4x4.world --x0 -0.9 -1.4 0 --goal 0.9 -0.3 --t-max 100
@@ -85,11 +86,12 @@ def main():
     ap.add_argument("--noise", type=float, default=0.0, help="range noise std (m)")
     ap.add_argument("--nominal", default="pursuit", choices=["pursuit", "mppi"])
     ap.add_argument("--sensing-range", type=float, default=None, help="override the profile's LiDAR range (m)")
-    ap.add_argument("--filter", default="none", choices=["none", "backup"],
-                    help="backup: the backup filter (needs the profile's V0 file)")
+    ap.add_argument("--filter", default="none", choices=["none", "backup", "hj", "hj_backup"],
+                    help="backup: the backup filter; hj: the classic HJ filter; hj_backup: HJ, with the backup filter "
+                         "as a safety net (all need the profile's V0 file)")
     ap.add_argument("--unknown", default="occupied", choices=["occupied", "free"],
-                    help="backup filter: treat unknown space as occupied (frontier edges are obstacles) or free")
-    ap.add_argument("--v0", default=None, help="backup filter: V0 file (default: the profile's base_value)")
+                    help="filter: treat unknown space as occupied (frontier edges are obstacles) or free")
+    ap.add_argument("--v0", default=None, help="filter: V0 file (default: the profile's base_value)")
     ap.add_argument("--events", action="store_true", help="print the obstacle detection events")
     ap.add_argument("--out", default="outputs/sim_burger.png")
     args = ap.parse_args()
@@ -103,10 +105,10 @@ def main():
         origin, size = world.bounds()
         grid = OccupancyGrid(origin, size, profile.map.resolution)
     safety, title = None, f"{args.nominal} only"
-    if args.filter == "backup":
-        from nav_core.safety import BackupFilter
-        safety = BackupFilter(profile, args.v0, unknown=args.unknown)
-        title = f"{args.nominal} + backup filter, unknown {args.unknown}"
+    if args.filter != "none":
+        from nav_core.safety import make_filter
+        safety = make_filter(profile, args.filter, args.v0, unknown=args.unknown)
+        title = f"{args.nominal} + {args.filter} filter, unknown {args.unknown}"
     tracker = ObstacleTracker() if args.events else None
     ep = run_episode(profile, world, args.x0, args.goal, make_nominal(profile, args.nominal), safety=safety,
                      t_max=args.t_max, snapshot_every=1.0, noise_std=args.noise, grid=grid, tracker=tracker)

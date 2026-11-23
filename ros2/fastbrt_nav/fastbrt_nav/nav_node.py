@@ -4,7 +4,7 @@ fastbrt_nav: LiDAR navigation in an unknown map with the FaST-BRT safety filter.
 The same loop as ``nav_core.sim.run_episode``, wired to ROS 2 (Humble or Jazzy):
 
   /scan, /odom --> accumulated occupancy grid --> nominal (pursuit | MPPI)
-               --> backup filter (optional) --> /cmd_vel
+               --> safety filter (optional: backup | hj | hj_backup) --> /cmd_vel
 
 Every control period (the profile's ctrl_dt) the node integrates the latest
 scan at the latest pose, decides the turn rates for the period, and publishes
@@ -58,7 +58,7 @@ class FastBrtNav(Node):
         P("goal_radius", 0.1)
         P("spawn", [-0.8, -0.8, 0.2])             # spawn pose (x, y, yaw) = odom origin in the world
         P("nominal", "mppi")                      # pursuit | mppi
-        P("filter", "backup")                     # none | backup
+        P("filter", "backup")                     # none | backup | hj | hj_backup
         P("unknown", "occupied")                  # backup filter mode: occupied | free
         P("primitives", "faces")                  # backup filter primitives: faces | rings
         P("v0", "")                               # backup filter V0 file; "": the profile's base_value
@@ -79,12 +79,10 @@ class FastBrtNav(Node):
             self.grid = OccupancyGrid.from_profile(self.profile)
         self.nominal = make_nominal(self.profile, g("nominal"))
         self.safety = None
-        if g("filter") == "backup":
-            from nav_core.safety import BackupFilter
-            self.safety = BackupFilter(self.profile, g("v0") or None, unknown=g("unknown"),
-                                       primitives=g("primitives"))
-        elif g("filter") != "none":
-            raise ValueError(f"filter must be 'none' or 'backup', got {g('filter')!r}")
+        if g("filter") != "none":
+            from nav_core.safety import make_filter
+            self.safety = make_filter(self.profile, g("filter"), g("v0") or None, unknown=g("unknown"),
+                                      primitives=g("primitives"))
 
         self.pose = None                          # world frame (x, y, theta)
         self.scan = None                          # (angles, ranges) of the newest scan

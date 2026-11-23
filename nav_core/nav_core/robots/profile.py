@@ -71,7 +71,8 @@ class RobotProfile:
     ctrl_dt: Optional[float]             # s
     map: MapSpec
     world: Optional[str]                 # path relative to the repo root
-    base_value: Optional[str]
+    base_value: Optional[str]            # offline V0 file, absolute or relative to ``root``
+    root: Optional[Path] = None          # the folder that holds robots/ (the repo root): relative paths start here
 
     @property
     def units(self) -> Units:
@@ -109,7 +110,7 @@ def load_profile(name_or_path) -> RobotProfile:
         footprint_radius=d["footprint_radius"], sensor=SensorSpec(**d["sensor"]), ctrl_dt=d["ctrl_dt"],
         map=MapSpec(origin=None if m["origin"] is None else tuple(m["origin"]),
                     size=None if m["size"] is None else tuple(m["size"]), resolution=m["resolution"]),
-        world=d.get("world"), base_value=d.get("base_value"))
+        world=d.get("world"), base_value=d.get("base_value"), root=p.resolve().parents[1])
     if profile.status == "ready":
         profile.check_limits()
     return profile

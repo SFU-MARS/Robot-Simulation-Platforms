@@ -20,7 +20,7 @@ Each control period:
 - **Nominal controller.** It drives towards the goal and carries no safety guarantee. Two are available: pure pursuit, which ignores the map, and MPPI on the accumulated map, which is optimistic about unknown space.
 - **Safety filter.** There is one 2D line primitive per obstacle face, transported from a single precomputed BRT value function. The filter overrides the nominal control only when needed. By default unknown space is treated as occupied.
   - Where two primitives meet at a corner, their union can leak. An online local update ([HJ_local_update](https://github.com/SFU-MARS/HJ_local_update)) is planned to fix this.
-  - Three filter modes are planned: `hj` (classic HJ filter), `backup` (backup filter) and `hj_backup`. Only `backup` exists so far.
+  - Three filter modes: `hj` (classic HJ filter, not safe at leaking corners), `backup` (backup filter) and `hj_backup` (HJ first, backup as the safety net); see [docs/05](docs/05_safety_filter.md) §5.8.
 - **Map.** It accumulates over the whole run. The environment is static, so the known free space only grows. In simulation the pose is known (odometry / ground truth), so no SLAM is needed.
 
 ### Division of work
@@ -32,7 +32,7 @@ Each control period:
 
 - **Dependency direction.** Dependencies point one way: this repository → fast-brt → HJ_local_update. No HJ solver code lives here.
 - **Branches.** Both submodules track our own branch `robot-sim`. Never push to their `main`.
-- **Offline V0, online point query.** The backup filter reads one offline value function V₀ (`python -m fast_brt export-v0` in fast-brt, on the odp machine) with fast-brt's `fast_brt.query`, which is numpy only. The V₀ file is set per robot (`base_value` in `robots/<name>.yaml`, a path from the repository root). It is not in git: copy it to `fast-brt/results/v0/`. `nav_core.safety` imports `fast_brt.query` from `PYTHONPATH`, or else from the `fast-brt/` submodule. The old [Hu-Hanyang/FaST-BRT](https://github.com/Hu-Hanyang/FaST-BRT) is no longer used; don't put it on `PYTHONPATH` (its package has the same name).
+- **Offline V0, online point query.** The backup filter reads one offline value function V₀ (`python -m fast_brt export-v0` in fast-brt, on the odp machine) with fast-brt's `fast_brt.query`, which is numpy only. The V₀ file is set per robot (`base_value` in `robots/<name>.yaml`, a path from the repository root). It is not in git: the V₀ files are assets of a GitHub release of this repository, listed with their sha256 in `robots/v0_release.yaml`; `cd nav_core && python scripts/fetch_v0.py` downloads them to `fast-brt/results/v0/`, and loading a listed file checks its checksum. `ROBOT_SIM_V0=<file>` overrides the profile's V₀. `nav_core.safety` imports `fast_brt.query` from `PYTHONPATH`, or else from the `fast-brt/` submodule. The old [Hu-Hanyang/FaST-BRT](https://github.com/Hu-Hanyang/FaST-BRT) is no longer used; don't put it on `PYTHONPATH` (its package has the same name).
 - **No online solves.** Primitive values are solved offline with `optimized_dp` and loaded at start-up. The local update recomputes only a small region online: HeteroCL in the `odp` environment, or the numpy implementation.
 - **odp utilities online.** Online code may import `odp`'s grid / index utilities, which do not need HeteroCL. It reaches them through `PYTHONPATH`.
 
@@ -136,24 +136,21 @@ In both modes the modelled obstacle is the complement of the region. Every detec
 PYTHONPATH=. python scripts/run_sim.py --filter backup [--unknown free]
 ```
 
-Burger, default start and goal: the run reaches the goal at t ≈ 17.6 s, with 7 interventions in 88 periods and a 5.5 cm minimum clearance. Batches of random starts × goals gave these results (no collision with either filter mode):
+Burger, default start and goal (pursuit): the run reaches the goal at t ≈ 17.8 s, with 10 interventions in 89 periods and a 4.3 cm minimum clearance. Batches of random starts × goals (`experiments/filter_batch.py`, pursuit, the default V₀ and inward placement, 2026-11-22) gave these results (no collision with either filter mode):
 
 | world | | reached | collision | timeout |
 | --- | --- | --- | --- | --- |
-| `hj_reach_target` (26 runs) | nominal only | 10 | 16 | 0 |
-| | unknown occupied | 13 | 0 | 13 |
-| | unknown free | 13 | 0 | 13 |
-| walls + free-standing pillar (35 runs) | nominal only | 22 | 13 | 0 |
-| | unknown occupied | 35 | 0 | 0 |
-| | unknown free | 35 | 0 | 0 |
+| `hj_reach_target` (27 runs) | nominal only | 7 | 20 | 0 |
+| | unknown occupied | 16 | 0 | 11 |
+| | unknown free | 16 | 0 | 11 |
+| walls + free-standing pillar (28 runs) | nominal only | 19 | 9 | 0 |
+| | unknown occupied | 28 | 0 | 0 |
+| | unknown free | 28 | 0 | 0 |
 
 - **Modes look alike here.** The two modes barely differ because the 2 m arena with a 0.8 m LiDAR range has little occlusion. A larger, more occluded world is needed to compare them.
 - **Timeouts.** Pure pursuit ignores obstacles, so the backup filter keeps rejecting it and the robot loiters on its certified circle. This is a liveness problem of the nominal controller, not of the filter.
 - **Geometry.** The 2 m arena is tight for a certified loiter circle. What matters is the turning radius v / ω_max. At 0.2 m there is no witness at the start, so the Burger profile uses 0.1 m (v = 0.1 m/s, ω_max = 1 rad/s). This is also within the differential-drive limit v + ω_max · track / 2 ≤ wheel speed, which `load_profile` checks. The Burger's 0.22 m/s and 2.84 rad/s maxima cannot be reached at the same time.
-- **Primitive placement.** The results above use the current code default `placement="centered"`: the face is the rectangle's midline. Long faces are cut (`cut=True`) so that no primitive reaches more than one cell off its face (`h_max`).
-  - The intended design is `placement="inward", cut=False`: the rectangle's free-facing side lies on the face. Then the BRT depends only on the face length L, and no cutting is needed (Design decision 3).
-  - The inward placement also has no collisions, with fewer interventions and 60–75 % fewer primitives ([docs/10](docs/10_primitive_alpha_accuracy.md)).
-  - The default switches once the offline BRT value `V₀` is loaded from fast-brt ([roadmap](docs/11_roadmap.md) step 5).
+- **Primitive placement.** The results above use the default `placement="inward", cut=False`: the rectangle's free-facing side lies on the face, so the BRT depends only on the face length L and no cutting is needed (Design decision 3). The earlier `placement="centered", cut=True` (the face as the rectangle's midline, long faces cut so that no primitive reaches more than one cell off its face) is kept as an option; it also has no collisions, with more interventions and 3–4 times more primitives ([docs/10](docs/10_primitive_alpha_accuracy.md), [roadmap](docs/11_roadmap.md) §11.3).
 
 **Nominal controllers.**
 - `pursuit` always turns the robot's heading towards the goal, at a turn rate proportional to the heading error (capped at ω_max). It ignores the map, so it drives straight into obstacles.
@@ -165,31 +162,31 @@ Burger, default start and goal: the run reaches the goal at t ≈ 17.6 s, with 7
 
 Batches of random starts × goals, with no filter and with the backup filter:
 
-| world | nominal | nominal only | + backup filter |
+| world | nominal | nominal only | + backup filter (unknown occupied) |
 | --- | --- | --- | --- |
-| `hj_reach_target` (26 runs) | pursuit | 10 reached, 16 collisions | 13 reached, 0 collisions, 13 timeouts |
-| | mppi | 19 reached, 7 collisions | 13 reached, 0 collisions, 13 timeouts |
-| walls + pillar (35 runs) | pursuit | 22 reached, 13 collisions | 35 reached |
-| | mppi | 34 reached, 1 collision | 35 reached, filter never had to intervene |
+| `hj_reach_target` (27 runs) | pursuit | 7 reached, 20 collisions | 16 reached, 0 collisions, 11 timeouts (intervention rate 0.24) |
+| | mppi | 20 reached, 7 collisions | 16 reached, 0 collisions, 11 timeouts (0.049) |
+| walls + pillar (28 runs) | pursuit | 19 reached, 9 collisions | 28 reached (0.057) |
+| | mppi | 28 reached | 28 reached (0.004) |
 
-**Why the 13 timeouts in `hj_reach_target` do not go away with MPPI.** The robot model cannot stop: it always drives at constant speed and can only steer. The only way to "wait safely" is to drive in a tight circle (radius 0.1 m). The backup filter therefore accepts a command only if, afterwards, the robot still has a way to reach known free space wide enough to circle in. That takes about 0.45 m: the circle's 0.2 m diameter, plus the robot's width (2 × 0.105 m), plus a margin. The upper-left area of this world is reachable only through a 0.4 m gap between obstacle 1 and the north wall. The robot itself would fit, but it could not circle inside the gap, so the backup filter never lets it in. Exactly 13 of the 26 runs need that gap. This is a limit of the constant-speed model, not of the nominal controller. A robot that can brake (Dubins 4D, QBot) can "wait safely" by stopping and does not have it.
+**Why the 13 timeouts in `hj_reach_target` do not go away with MPPI.** The robot model cannot stop: it always drives at constant speed and can only steer. The only way to "wait safely" is to drive in a tight circle (radius 0.1 m). The backup filter therefore accepts a command only if, afterwards, the robot still has a way to reach known free space wide enough to circle in. That takes about 0.45 m: the circle's 0.2 m diameter, plus the robot's width (2 × 0.105 m), plus a margin. The upper-left area of this world is reachable only through a 0.4 m gap between obstacle 1 and the north wall. The robot itself would fit, but it could not circle inside the gap, so the backup filter never lets it in. Exactly 11 of the 27 runs need that gap. This is a limit of the constant-speed model, not of the nominal controller. A robot that can brake (Dubins 4D, QBot) can "wait safely" by stopping and does not have it.
 
 **Occluded world and the two filter modes.** `worlds/occluded_4x4.world` is a 4 × 4 m arena with:
 - three screens, each with a box hidden right behind one of its ends;
 - three free-standing pillars.
 
-The sweep uses MPPI as the nominal controller and varies the LiDAR range. There are 26 runs per row: random starts × goals plus the three traps.
+The sweep uses MPPI as the nominal controller and varies the LiDAR range. There are 23 runs per row: random starts × goals (`experiments/filter_batch.py --worlds occluded --ranges 0.3 0.5 0.8`, 2026-11-22).
 
 | LiDAR range | no filter | unknown = occupied | unknown = free |
 | --- | --- | --- | --- |
-| 0.3 m (3 × turning radius) | 22 reached, 4 collisions | cannot start (26 runs) | 21 reached, **5 collisions** |
-| 0.5 m (5 ×) | 24 reached, 2 collisions | 19 reached, 0 collisions, 7 timeouts | 20 reached, 0 collisions, 6 timeouts |
-| 0.8 m (8 ×) | 22 reached, 4 collisions | 20 reached, 0 collisions, 6 timeouts | 20 reached, 0 collisions, 6 timeouts |
+| 0.3 m (3 × turning radius) | 19 reached, 4 collisions | cannot start (23 runs) | 18 reached, **2 collisions**, 3 timeouts |
+| 0.5 m (5 ×) | 21 reached, 2 collisions | 17 reached, 0 collisions, 6 timeouts | 18 reached, 0 collisions, 5 timeouts |
+| 0.8 m (8 ×) | 19 reached, 4 collisions | 16 reached, 0 collisions, 7 timeouts | 16 reached, 0 collisions, 7 timeouts |
 
 How to read the table:
 - *`unknown = free` is not safe when the LiDAR range is short.* This mode treats unseen space as drivable, so the filter can approve a path into space that hides an obstacle. With a 0.3 m range, the obstacle is seen too late to turn away.
 - *`unknown = occupied` never collides, but needs a minimum range.* After the first scan, the known free space must already hold the circle the robot waits on: roughly LiDAR range ≥ robot radius + 2 × turning radius + margin ≈ 0.34 m. At 0.3 m it cannot start.
-- *At 5× and 8× the turning radius both modes are safe.* `free` was not faster.
+- *At 5× and 8× the turning radius both modes are safe.* `free` was not faster (one run more at 0.5 m).
 
 **Obstacle layer.** `extract_obstacles(grid, offset=0)` returns the obstacles of the accumulated map (README, Design decisions 1–4):
 - the obstacles themselves: connected components of occupied cells, with touching objects merged into one;
@@ -244,7 +241,7 @@ Comparison on the occluded world (three routes, MPPI, no filter):
 
 A flicker event is an `updated` event in which an obstacle lost cells; in a static world an obstacle should only grow. The previous model is still available as `OccupancyGrid(..., model="logodds")`.
 
-Switching the default did not change any batch result above except the occluded sweep, which moved by one or two runs (the numbers shown are with the new model). There were no collisions with either filter mode.
+Switching the default did not change the batch results of that time except the occluded sweep, which moved by one or two runs. There were no collisions with either filter mode. (The batches above were rerun on 2026-11-22 with the ported filter and the new V₀.)
 
 **Scan conventions** (REP 117):
 - `+inf`, or a reading ≥ range max, means no return: the ray is free up to the range.
@@ -409,9 +406,9 @@ Decisions taken so far, with their reasons, so that they are not revisited by ac
 - *Options.* Linear / quadratic × low / medium V₀ are all kept, to compare them (`experiments/filter_batch.py --v0 ...`).
 
 **8. Three filter modes are kept as options.**
-- `hj`: the classic HJ filter on the primitive values.
-- `backup`: the backup filter. It accepts the nominal control only if a safe backup maneuver exists afterwards.
-- `hj_backup`: both combined.
+- `hj`: the classic HJ filter on the primitive values (`HJFilter`): nominal while the distance margin of U = min_i V_i (V / √α, in metres, the same for both encodings) stays above `margin`, else the HJ evasion. Not safe at leaking corners. `robust=True` adds the map clearance and the sampling gap between sub-steps.
+- `backup`: the backup filter (`BackupFilter`). It accepts the nominal control only if a safe backup maneuver exists afterwards.
+- `hj_backup`: the HJ filter proposes, the backup filter checks (`HJBackupFilter`). Its `margin` must be positive (default 2 cm), otherwise the backup filter always acts first.
 
 **9. Dynamics order.** Constant-speed Dubins 3D comes first; its parameters will be swept later. Dubins 4D (QBot) follows, and a 6D drone after that.
 
@@ -433,7 +430,7 @@ Decisions taken so far, with their reasons, so that they are not revisited by ac
 - [x] Inward primitive placement option (`placement="inward"`) and the α study (`experiments/alpha_study.py`, [docs/10](docs/10_primitive_alpha_accuracy.md))
 - [x] Backup filter ported into `nav_core/safety` as `BackupFilter`, using fast-brt's point query and the offline V₀; defaults inward placement, no cutting ([roadmap](docs/11_roadmap.md) step 4)
 - [ ] Rerun the batches with the new V₀ and update the docs (step 5)
-- [ ] Filter modes `hj` and `hj_backup`
+- [x] Filter modes `hj` and `hj_backup` (`nav_core.safety.HJFilter`, `HJBackupFilter`, `make_filter`)
 - [x] Occluded test world (`worlds/occluded_4x4.world`) and LiDAR-range sweep of the two modes
 - [ ] Start-up check that the LiDAR range lets `unknown=occupied` start (≈ robot radius + 2 × turning radius + margin)
 - [x] Obstacle layer (Design decisions 1–4, `nav_core.mapping.extract_obstacles`): connected components → enclosing faces (shallow turns merged) → lengths, IDs, corners (convex / concave)
