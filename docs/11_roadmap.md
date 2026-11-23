@@ -16,6 +16,7 @@
 | primitive 放置   | **内移**：矩形朝向自由空间的边和检测到的面重合，BRT 只由长度 L 决定，长面不切段                                                                                  | [10 §10.2](10_primitive_alpha_accuracy.md) |
 | 离线`V₀`      | **线性编码 + odp `accuracy="low"` + 241 网格 + α=20 + BRT**（2026-11-22 从 medium 改成 low：和 local update 的一阶格式一致，全程只用一份 `V₀`）；线性 / 二次 × low / medium 四份都保留成选项，用来比较差距 | [10 §10.3](10_primitive_alpha_accuracy.md) |
 | 精度和 local update | 要进 local update 的 primitive **只能用 `low`**（kernel 是一阶格式）；`medium` 的 `V₀` 只用于点查询，暂时不用于 local update；要用二阶得改 kernel | [05 §5.3](05_safety_filter.md) |
+| 在线修 leaking corner | **稳态 local update**：假设 primitive 的 BRT 已收敛，拐角窗口里从并集出发迭代一步 BRT 算子到收敛，只用 V₀ 最后一层；直接求解作为参考（2026-11-22 决定） | [13](13_online_local_update.md) |
 | 短面             | 短于`L_min ≈ 2·dx·√α`（约 0.45 R）的面，对称延长到 `L_min`                                                                                                    | [10 §10.1](10_primitive_alpha_accuracy.md) |
 | primitive 用 BRT | BRS 在面前方的高度为 0，不能用于避障                                                                                                                                   | [10 §10.3](10_primitive_alpha_accuracy.md) |
 | filter           | 三种都保留为选项：`hj`（经典 HJ filter）、`backup`（后路验证，原 witness gatekeeper）、`hj_backup`（**HJ 为主、backup 兜底**：HJ 给出这一周期的候选控制，backup 检查走完后有没有 witness，2026-11-22 决定） | [05 §5.8](05_safety_filter.md)                   |
@@ -114,8 +115,8 @@
 - [X] `hj` 和 `hj_backup` 两种 filter mode（`nav_core/safety/hj_filter.py`，2026-11-22）：`hj_backup` = HJ 为主、backup 兜底，`margin` 必须 > 0（默认 2 cm），见 [05 §5.8](05_safety_filter.md)；批量对比（margin 改成距离、`hj` 不再构造 region 后重跑）：`hj` 在有拐角的场景（hj、遮挡）里有 4–10 次碰撞，从不超时；`hj_backup` 三个场景都没有碰撞，到达数和 `backup` 接近，介入率高（0.13–0.47，HJ 提前避让）。诊断（`experiments/hj_failures.py`）：11 次碰撞里 9 次是 leaking corner，1 次单个面 `V₀` 低估，1 次 `U ≤ 0` 后逃逸太晚；`robust` 反而让失败变成 28 次（27 次拐角）；`hj_backup` 三个场景都没有碰撞，到达数和 `backup` 基本相同，介入率高（0.17–0.48，HJ 提前避让）；
 - [X] local update 的 BRT 版本（HJ_local_update `robot-sim` 分支，`brt=True`）：每个被更新的点再取 `min(V, V(t=0))`；numpy 版在本地验证过，和整体 BRT 求解**符号完全一致**（L 形两条线：并集漏 74 格，local update 后 0 格）；fast-brt 新增 `target_set_mode="brt"` 和 `local_update_impl="numpy"`。原因和改动见 [12](12_local_update_brt.md)；
 - [ ] 在 mars-14 上验证 HeteroCL 版的 BRT local update，并测实时性（`pytest -m slow -k tube`、`experiments/local_update_timing.py`）；
-- [ ] local update 目前只能用一阶格式（和 primitive library 的格式必须一致，否则修正区域会扩张到整张网格）；要用二阶，得改 kernel（ENO2 + RK2）；
-- [ ] local update 接入在线流程：fast-brt 服务模式或 numpy 版直接在线跑（先比较 numpy 和 HeteroCL 的速度）；随机器人移动的窗口（G4）、按障碍 ID 增量更新（G5）；
+- [ ] local update 目前只能用一阶格式（和 primitive library 的格式必须一致，否则修正区域会扩张到整张网格）；要用二阶，得改 kernel（ENO2 + RK2）。稳态版也用一阶步进（和 low 的 V₀ 一致）；
+- [X] **local update 接入在线流程（见 [13](13_online_local_update.md)）**：`SceneFilter(corners=True, corner_mode="sync" | "delayed" | "thread")`，默认 θ 30、只修障碍面之间的拐角；`hj` 的拐角碰撞在批量里消失（hj 场景 7 → 0，遮挡 4 → 1，剩下的不是拐角）；异步时拐角计算每步约 0.09–0.13 s。原计划和改法：不照搬逐时间步的 local update（它要每个面每个时间步、和网格严格对齐的值，numpy 版每点 14 µs），改为拐角窗口里的**稳态 local update**：假设单个 primitive 的 BRT 已收敛（已验证 T = 2 收敛），从并集 U 出发迭代 `V ← min(ℓ, V + dt·H(V))`，只更新还在变的点，只用 V₀ 最后一层、任意角度；直接求解作为参考。向量化一阶步进和 `value_change_numpy` 逐位相同；
 - [ ] 对比实验：只用 transport vs transport + local update（介入率、超时、后路搜索开销），α 对 `hj` filter 的影响。
 
 **动力学和机器人**
@@ -135,5 +136,5 @@
 ## 11.6 待讨论的问题
 
 1. ~~**local update 和 BRT**~~：已解决（2026-11-21）。只把最后一层换成 BRT 不等价，所以改成在 local update 的每一步里取 `min(V, ℓ)`，见 [12](12_local_update_brt.md)。
-2. **local update 的定位**：在线每周期跑，还是按事件触发、异步更新？numpy 版够不够快？
+2. **local update 的定位**：倾向按拐角事件触发、异步计算，算好前由 backup 兜底（[13](13_online_local_update.md)）；速度待实测。
 3. **6D 无人机用哪个模型**。

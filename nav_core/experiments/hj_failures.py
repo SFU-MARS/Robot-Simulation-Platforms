@@ -9,6 +9,8 @@ classify the failure from that state:
   single face     -- U > 0 but one face alone can no longer be escaped: V0 underestimates that face's BRT;
   U <= 0 already  -- the filter knew, its evasion came too late or did not work.
 
+U is the value the filter sees: with --corners, the union lowered at the corrected corners (docs/13).
+
 "Can be escaped" is checked with a rich set of rollouts (hold w1 for k steps, then w2; w in {-1, -0.5, 0, 0.5, 1}
 and {-1, 0, 1}, switches every 2 sub-steps), exact arcs, margin > 0 at every sub-step over T = 2 (model units).
 It is a lower bound: an escape the set misses counts as no escape.  If the true world can still be escaped at the
@@ -78,7 +80,8 @@ class LoggingHJFilter(HJFilter):
         out = super().__call__(x, w_nom, grid)
         xm = self.to_model(x)
         q = self.v0.query(xm[None], self.model.faces)
-        self.log.append((xm, float(q.value[0]), int(q.face[0]), self.model))
+        # U as the filter sees it (with the corrected corners if any); the nearest face for the classification
+        self.log.append((xm, float(self.model.value(xm[None])[0]), int(q.face[0]), self.model))
         return out
 
 
@@ -103,6 +106,8 @@ def main():
     ap.add_argument("--nominal", default="mppi", choices=["mppi", "pursuit"])
     ap.add_argument("--margin", type=float, default=0.0, help="HJ filter margin (m)")
     ap.add_argument("--robust", action="store_true", help="HJ filter: add the clearance and the sampling gap")
+    ap.add_argument("--corners", action="store_true", help="correct the leaking corners (docs/13)")
+    ap.add_argument("--corner-theta", type=int, default=None)
     ap.add_argument("--verbose", action="store_true", help="also print U and the escapes of the last 8 periods")
     args = ap.parse_args()
 
@@ -117,7 +122,8 @@ def main():
             return (w.distance(units.pos_to_phys(xy)) - profile.footprint_radius) / units.length
 
         for i, (x0, goal) in enumerate(cases(world, profile)):
-            gate = LoggingHJFilter(profile, v0, margin=args.margin, robust=args.robust)
+            gate = LoggingHJFilter(profile, v0, margin=args.margin, robust=args.robust, corners=args.corners,
+                                  corner_theta=args.corner_theta)
             grid = None if world["grid"] is None else OccupancyGrid(*world["grid"], profile.map.resolution)
             nominal = make_nominal(profile, args.nominal, **({"seed": i} if args.nominal == "mppi" else {}))
             ep = run_episode(profile, world["w"], x0, goal, nominal, safety=gate, t_max=100, seed=i, grid=grid)

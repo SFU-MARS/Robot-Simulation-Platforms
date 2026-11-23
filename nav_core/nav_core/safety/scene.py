@@ -72,6 +72,13 @@ def import_query():
     return query
 
 
+def import_corner():
+    """The module ``fast_brt.corner`` (the online corner correction, numpy only), found like ``import_query``."""
+    import_query()
+    import fast_brt.corner as corner
+    return corner
+
+
 def load_v0(v0, root=None):
     """A ``fast_brt.query.PrimitiveV0`` from a V0 file, or ``v0`` itself if it is one.  Relative paths start at
     ``root`` (default: this repository)."""
@@ -168,8 +175,9 @@ class Scene:
     region, if any) U (primitive rectangles); ``margin`` is the signed
     distance to it (positive = free)."""
 
-    def __init__(self, v0, faces, rings, clearance: float, horizon: float):
+    def __init__(self, v0, faces, rings, clearance: float, horizon: float, corners=()):
         self.v0, self.faces = v0, faces
+        self.corners = list(corners)                  # fast_brt.corner.CornerWindow: corrected values at corners
         self.frames = faces.rectangles()
         self.rings = rings
         self._C = faces.center
@@ -207,33 +215,63 @@ class Scene:
         return m
 
     def value(self, states: np.ndarray) -> np.ndarray:
-        """HJ value of the union of the primitives at states (N, 3); inf without primitives."""
-        return self.v0.value(states, self.faces)
+        """HJ value of the union of the primitives at states (N, 3), lowered at the corrected corners; inf without
+        primitives."""
+        out = self.v0.value(states, self.faces)
+        for w in self.corners:
+            out = np.minimum(out, w.values(states))
+        return out
 
     def hj_margin(self, states: np.ndarray) -> np.ndarray:
         """Distance margin of the union (model length units, ``PrimitiveV0.margin``): every state within it (same
-        heading) is outside the BRT of every primitive; inf without primitives."""
-        return self.v0.margin(states, self.faces)
+        heading) is outside the BRT of every primitive; inf without primitives. Lowered at the corrected corners
+        (their values are in the linear encoding)."""
+        out = self.v0.margin(states, self.faces)
+        lipschitz = max(1.0, float(np.sqrt(self.v0.alpha)))
+        for w in self.corners:
+            out = np.minimum(out, w.values(states) / lipschitz)
+        return out
 
     def hj_control(self, states: np.ndarray) -> np.ndarray:
-        """Optimal turn rate of the nearest primitive, w = sign(dV/dtheta); straight without primitives."""
+        """Optimal turn rate w = sign(dV/dtheta) of what gives the value: the nearest primitive, or a corrected
+        corner where it is lower; straight without primitives."""
         states = np.atleast_2d(states)
         if not len(self.faces):
             return np.zeros(len(states))
-        return self.v0.query(states, self.faces).control[:, 0]
+        q = self.v0.query(states, self.faces)
+        control, best = q.control[:, 0].copy(), q.value.copy()
+        w_max = float(self.v0.dynamics_params.get("wMax", 1.0))
+        for w in self.corners:
+            v = w.values(states)
+            lower = v < best
+            if lower.any():
+                control[lower] = np.where(w.dtheta(states[lower]) < 0, -w_max, w_max)
+                best[lower] = v[lower]
+        return control
 
 
 class SceneFilter:
     """Common part of the filters: the profile, V0, units, and the scene of each period (``scene``).
 
     V0: ``v0`` if given, else the file in the environment variable ROBOT_SIM_V0, else the profile's
-    ``base_value``; relative paths start at the folder that holds the profile's robots/ (``profile.root``)."""
+    ``base_value``; relative paths start at the folder that holds the profile's robots/ (``profile.root``).
+
+    ``corners=True`` corrects the leaking corners near the robot (fast_brt.corner, docs/13): the stationary local
+    update on a window around each corner (spacing ``corner_dx``, model units; ``corner_theta`` headings, default 30,
+    None: as many as V0), solved when the corner appears or its
+    faces move by more than ``corner_reuse``; the scene's value, margin and HJ control use the corrected values.
+    Only corners between obstacle faces by default; ``corner_frontier=True`` also corrects corners with a frontier
+    edge (no difference in safety in the batches of docs/13, 23-32 % more solve time: the frontier moves every scan).
+    ``corner_mode``: "sync" (solve at once), "delayed" (simulation: the result is usable once the measured solve
+    time has passed in simulated time, solves queue on one simulated worker) or "thread" (a background thread)."""
 
     uses_region = True                         # filters that only use the primitives set False: no region is built
 
     def __init__(self, profile, v0=None, unknown: str = "occupied", primitives: str = "faces",
                  placement: str = "inward", cut: bool = False, horizon: float = 2.0, sub_dt: float = 0.05,
-                 clearance: "float | None" = None, h_max: "float | None" = None):
+                 clearance: "float | None" = None, h_max: "float | None" = None, corners: bool = False,
+                 corner_dx: float = 0.1, corner_reuse: float = 0.2, corner_frontier: bool = False,
+                 corner_theta: "int | None" = 30, corner_warm: bool = True, corner_mode: str = "sync"):
         profile.require_ready()
         if profile.dynamics != "dubins3d":
             raise NotImplementedError(f"{type(self).__name__} for dynamics {profile.dynamics!r}")
@@ -270,6 +308,25 @@ class SceneFilter:
             raise ValueError(f"ctrl_dt {ctrl_dt} (model time) is not a multiple of sub_dt {sub_dt}")
         self.steps = self.interventions = 0
         self.model = None                              # last scene, for plots
+        # corner correction (docs/13): windows near the robot, a solved window reused while its faces stay within
+        # corner_reuse (model units, 0.2 = 2 cm on the Burger, below the clearance) of the ones it was solved for
+        self.corners, self.corner_dx, self.corner_reuse = corners, corner_dx, corner_reuse
+        self.corner_frontier, self.corner_theta, self.corner_warm = corner_frontier, corner_theta, corner_warm
+        self.corner_warm_solves = 0
+        self._n_obstacle_faces = None
+        self._corner = import_corner() if corners else None
+        if corner_mode not in ("sync", "delayed", "thread"):
+            raise ValueError(f"corner_mode must be 'sync', 'delayed' or 'thread', got {corner_mode!r}")
+        self.corner_mode = corner_mode
+        self._slots = []                               # per corner: last window, its faces, the solve in progress
+        self._period = 0
+        self._worker_free = 0.0                        # "delayed": when the simulated worker is free again (s)
+        self.corner_stale = 0                          # (corner, period) pairs without an up-to-date window
+        if corners and corner_mode == "thread":
+            from concurrent.futures import ThreadPoolExecutor
+            self._corner_pool = ThreadPoolExecutor(max_workers=1)
+        self.corner_solves = 0
+        self.corner_seconds = 0.0
 
     def to_model(self, x) -> np.ndarray:
         return np.array([*self.units.pos_to_model(x[:2]), x[2] % (2 * np.pi)])
@@ -290,9 +347,108 @@ class SceneFilter:
         else:
             self.obstacles, self.events = self.tracker.update(extract_obstacles(grid, offset=r), res=grid.res)
             segments = [(to_m(f.a), to_m(f.b), f.normal) for f in self.obstacles.faces]
+            self._n_obstacle_faces = len(segments)
             if self.unknown == "occupied":
                 safe = safe_free_mask(grid, r)
                 segments += [(to_m(e.a), to_m(e.b), _free_normal(grid, safe, e.a, e.b))
                              for e in boundary_edges(grid, footprint_radius=r) if e.kind == "frontier"]
         faces = place_faces(self.v0, segments, self.placement, self.max_side_len)
-        return Scene(self.v0, faces, rings, self.clearance, self.horizon)
+        return Scene(self.v0, faces, rings, self.clearance, self.horizon,
+                     self.corner_windows(faces, self.units.pos_to_model(x[:2])))
+
+    def corner_windows(self, faces, xy=None) -> list:
+        """Corrected corner windows of the faces (``corners=True``) that can matter at ``xy`` (model units, the
+        robot): within the horizon's reach plus the usable half width. Each corner has a slot with the last window
+        solved for it; it is solved again (warm started from that window) only when its faces moved by more than
+        ``corner_reuse``. ``corner_mode``: "sync" solves at once; "delayed" (simulation) solves at once but lets the
+        robot use the result only after the measured solve time has passed in simulated time, one solve after the
+        other as on one background worker; "thread" solves on a background thread (online). Until a new solve is
+        ready, the slot's previous window is used (or none: the union only)."""
+        if not self.corners:
+            return []
+        self._period += 1
+        now = self._period * self.profile.ctrl_dt
+        self._promote(now)
+        if len(faces) < 2:
+            self._slots = []
+            return []
+        corner = self._corner
+        segments = corner.face_segments(faces)
+        windows, slots = [], []
+        for spec in corner.corner_windows(self.v0, faces, dx=self.corner_dx, n_theta=self.corner_theta):
+            if not self.corner_frontier and self._n_obstacle_faces is not None:
+                spec.pairs = [pr for pr in spec.pairs if max(pr[1], pr[2]) < self._n_obstacle_faces]
+                if not spec.pairs:
+                    continue
+            center = np.asarray(spec.grid.center)
+            if xy is not None and np.max(np.abs(center - xy)) > self.v0.reach + spec.grid.half:
+                continue
+            mine = segments[list(spec.faces)]
+            match = (spec.grid.half - 1.2) / 2.0
+            free = [sl for sl in self._slots if all(sl is not t for t in slots)]
+            slot = min(free, key=lambda sl: float(np.max(np.abs(sl["center"] - center))), default=None)
+            if slot is None or np.max(np.abs(slot["center"] - center)) > match:
+                slot = {"center": center, "segs": None, "window": None, "job": None}
+            slot["center"] = center
+            fresh = (slot["window"] is not None and len(slot["segs"]) == len(mine)
+                     and _segments_close(slot["segs"], mine, self.corner_reuse))
+            if not fresh and slot["job"] is None:
+                self._submit(slot, faces, spec, mine, now)
+                fresh = slot["job"] is None            # "sync": solved already
+            self.corner_stale += not fresh
+            if slot["window"] is not None:
+                windows.append(slot["window"])
+            slots.append(slot)
+        self._slots = slots
+        return windows
+
+    def _submit(self, slot, faces, spec, mine, now) -> None:
+        import time
+        previous = slot["window"] if self.corner_warm else None
+        self.corner_solves += 1
+        self.corner_warm_solves += previous is not None
+        if self.corner_mode == "thread":
+            def solve():
+                start = time.perf_counter()
+                window = self._corner.solve_window(self.v0, faces, spec, previous=previous)
+                return window, time.perf_counter() - start
+            slot["job"] = {"future": self._corner_pool.submit(solve), "segs": mine}
+            return
+        start = time.perf_counter()
+        window = self._corner.solve_window(self.v0, faces, spec, previous=previous)
+        seconds = time.perf_counter() - start
+        self.corner_seconds += seconds
+        if self.corner_mode == "sync":
+            slot["window"], slot["segs"] = window, mine
+            return
+        begin = max(now, self._worker_free)             # "delayed": one worker, in simulated time
+        self._worker_free = begin + seconds
+        slot["job"] = {"window": window, "segs": mine, "ready_at": self._worker_free}
+
+    def _promote(self, now: float) -> None:
+        """Move the finished solves into their slots."""
+        for slot in self._slots:
+            job = slot["job"]
+            if job is None:
+                continue
+            if "future" in job:
+                if not job["future"].done():
+                    continue
+                window, seconds = job["future"].result()
+                self.corner_seconds += seconds
+            elif job["ready_at"] > now:
+                continue
+            else:
+                window = job["window"]
+            slot["window"], slot["segs"], slot["job"] = window, job["segs"], None
+
+
+def _segments_close(a: np.ndarray, b: np.ndarray, tol: float) -> bool:
+    """Every segment of a has one in b with both ends (either order) within tol, and the other way round."""
+    def covered(x, y):
+        for s in x:
+            d = np.minimum(np.abs(y - s).max(axis=(1, 2)), np.abs(y[:, ::-1] - s).max(axis=(1, 2)))
+            if d.min() > tol:
+                return False
+        return True
+    return covered(a, b) and covered(b, a)

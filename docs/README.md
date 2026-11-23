@@ -20,6 +20,7 @@
 | [10 primitive 的放置、α 与精度](10_primitive_alpha_accuracy.md) | 内移放置、离线 `V₀` 精度复核（mars-14）、α 的选择、闭环对比 |
 | [11 路线图](11_roadmap.md) | **进度总表**：已定的决策、已完成、进行中、待办、待讨论的问题 |
 | [12 local update 的 BRT 版本](12_local_update_brt.md) | BRS 为什么不能避障、为什么不能事后补成 BRT、HJ_local_update 改了什么、验证结果 |
+| [13 在线修 leaking corner](13_online_local_update.md) | 稳态 local update（只用收敛的 V₀，不要时间历史）：为什么改计划、收敛证据、插值风险、进度 |
 
 只想快速上手：读 [01](01_overview.md) 和 [07](07_mppi_walkthrough.md) 就够。想知道现在做到哪了：读 [11 路线图](11_roadmap.md)。
 

@@ -262,3 +262,51 @@ def test_v0_checksum_from_the_release_manifest(tmp_path):
     check_v0(other, manifest)
     with pytest.raises(ValueError, match="sha256"):
         check_v0(bad, manifest)
+
+
+def test_corner_correction_closes_the_leak(v0):
+    """A concave corner of two faces: a state heading into it is safe for the union but not after the correction
+    (docs/13); the scene's value, margin and HJ control use the corrected window, and it is reused while the faces
+    stay put"""
+    from nav_core.safety import HJFilter, Scene, place_faces
+    p = load_profile("burger")
+    gate = HJFilter(p, v0, corners=True, corner_theta=30)
+    segments = [(np.array([0.0, 0.0]), np.array([3.0, 0.0]), np.array([0.0, 1.0])),
+                (np.array([0.0, 0.0]), np.array([0.0, 3.0]), np.array([1.0, 0.0]))]
+    faces = place_faces(v0, segments)
+    windows = gate.corner_windows(faces, np.array([0.5, 0.5]))
+    assert len(windows) == 1 and gate.corner_solves == 1
+    state = np.array([[0.5, 0.5, -2.3]])                          # heading into the corner
+    union = Scene(v0, faces, None, 0.3, 2.0)
+    fixed = Scene(v0, faces, None, 0.3, 2.0, windows)
+    assert union.value(state)[0] > 0 and fixed.value(state)[0] < 0
+    assert fixed.hj_margin(state)[0] < 0 < union.hj_margin(state)[0]
+    assert abs(fixed.hj_control(state)[0]) == 1.0
+    far = np.array([[2.5, 2.5, 0.0]])
+    assert fixed.value(far)[0] == pytest.approx(union.value(far)[0])
+    gate.corner_windows(faces, np.array([0.5, 0.5]))
+    assert gate.corner_solves == 1                                 # same faces: the window is reused
+    assert gate.corner_windows(faces, np.array([20.0, 20.0])) == []  # far from the robot: not solved
+
+
+@pytest.mark.parametrize("mode", ["delayed", "thread"])
+def test_corner_windows_arrive_later_when_asynchronous(v0, mode):
+    """'delayed' lets the robot use a window only after its solve time has passed in simulated time; 'thread' once
+    the background solve is done. Until then the scene has no window (the union only)."""
+    import time
+    from nav_core.safety import HJFilter, place_faces
+    gate = HJFilter(load_profile("burger"), v0, corners=True, corner_theta=30, corner_mode=mode)
+    faces = place_faces(v0, [(np.array([0.0, 0.0]), np.array([3.0, 0.0]), np.array([0.0, 1.0])),
+                             (np.array([0.0, 0.0]), np.array([0.0, 3.0]), np.array([1.0, 0.0])),
+                             (np.array([3.0, 0.0]), np.array([3.0, 3.0]), np.array([-1.0, 0.0]))])   # two corners
+    xy = np.array([1.5, 0.5])
+    assert gate.corner_windows(faces, xy) == [] and gate.corner_solves == 2
+    got, periods = [], 0
+    while len(got) < 2 and periods < 400:
+        if mode == "thread":
+            time.sleep(0.05)
+        got = gate.corner_windows(faces, xy)
+        periods += 1
+    assert len(got) == 2 and gate.corner_solves == 2               # one solve each, picked up when ready
+    if mode == "delayed":
+        assert periods * gate.profile.ctrl_dt >= gate.corner_seconds - 1e-9

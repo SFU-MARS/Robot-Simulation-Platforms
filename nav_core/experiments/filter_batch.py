@@ -11,6 +11,7 @@ of the options below is run.
     PYTHONPATH=. python experiments/filter_batch.py --placements inward centered+cut --worlds hj
     PYTHONPATH=. python experiments/filter_batch.py --nominals pursuit mppi --filters none backup --unknowns occupied free
     PYTHONPATH=. python experiments/filter_batch.py --filters backup hj hj_backup
+    PYTHONPATH=. python experiments/filter_batch.py --filters hj hj_backup --worlds hj occluded --corners --corner-mode delayed
     PYTHONPATH=. python experiments/filter_batch.py --worlds occluded --ranges 0.3 0.5 0.8 --filters none backup \\
         --unknowns occupied free
 
@@ -64,12 +65,13 @@ def cases(world, profile, seed=1):
     return [(x0, g) for x0 in starts for g in goals if np.linalg.norm(x0[:2] - g) > 0.4]
 
 
-def run(profile, world, v0, kw, unknown="occupied", nominal="mppi", kind="backup", t_max=100.0):
+def run(profile, world, v0, kw, unknown="occupied", nominal="mppi", kind="backup", t_max=100.0, corner_kw=None):
     """One batch with filter ``kind`` (backup | hj | hj_backup | none); v0 and kw (placement) are ignored without a filter."""
     c, clr, interv, prims, t_goal, steps, t0 = collections.Counter(), np.inf, [], [], [], 0, time.perf_counter()
+    solves, corner_s = 0, 0.0
     todo = cases(world, profile)
     for i, (x0, goal) in enumerate(todo):
-        gate = make_filter(profile, kind, v0, unknown=unknown, **(kw if kind != "none" else {}))
+        gate = make_filter(profile, kind, v0, unknown=unknown, **(dict(kw, **(corner_kw or {})) if kind != "none" else {}))
         grid = None if world["grid"] is None else OccupancyGrid(*world["grid"], profile.map.resolution)
         nom = make_nominal(profile, nominal, **({"seed": i} if nominal == "mppi" else {}))
         ep = run_episode(profile, world["w"], x0, goal, nom, safety=gate, t_max=t_max, seed=i, grid=grid)
@@ -83,13 +85,17 @@ def run(profile, world, v0, kw, unknown="occupied", nominal="mppi", kind="backup
             interv.append(gate.interventions / gate.steps)
         if gate is not None and gate.model is not None:
             prims.append(len(gate.model.frames))
+        if gate is not None:
+            solves += getattr(gate, "corner_solves", 0)
+            corner_s += getattr(gate, "corner_seconds", 0.0)
     return {"episodes": len(todo), "reached": c["reached"], "collision": c["collision"], "timeout": c["timeout"],
             "init_failed": c["init_failed"],
             "other": len(todo) - c["reached"] - c["collision"] - c["timeout"] - c["init_failed"],
             "min_clearance_m": round(clr, 4), "intervention_rate": round(float(np.mean(interv)) if interv else 0.0, 3),
             "median_time_to_goal_s": round(float(np.median(t_goal)) if t_goal else 0.0, 1),
             "primitives_last": round(float(np.mean(prims)) if prims else 0.0, 1),
-            "ms_per_step": round(1000 * (time.perf_counter() - t0) / max(steps, 1), 1)}
+            "ms_per_step": round(1000 * (time.perf_counter() - t0) / max(steps, 1), 1),
+            "corner_solves": solves, "corner_ms_per_step": round(1000 * corner_s / max(steps, 1), 1)}
 
 
 def main():
@@ -102,6 +108,13 @@ def main():
     ap.add_argument("--filters", nargs="+", default=["backup"], choices=["backup", "hj", "hj_backup", "none"])
     ap.add_argument("--ranges", nargs="+", type=float, default=[None],
                     help="LiDAR ranges (m) instead of the profile's")
+    ap.add_argument("--corners", action="store_true", help="correct the leaking corners (docs/13)")
+    ap.add_argument("--corner-theta", type=int, default=30, help="headings of the corner windows (default 30)")
+    ap.add_argument("--corner-frontier", action="store_true",
+                    help="also correct the corners with a frontier edge (default: only between obstacle faces)")
+    ap.add_argument("--corner-mode", default="sync", choices=["sync", "delayed", "thread"],
+                    help="when the corrected corners can be used: at once, after their solve time (simulated), "
+                         "or from a background thread")
     ap.add_argument("--out", default=str(Path(__file__).resolve().parents[1] / "outputs" / "filter_batch.csv"))
     args = ap.parse_args()
 
@@ -120,8 +133,12 @@ def main():
                "filter": "none" if v0 is None else f"{kind}, unknown {unknown}",
                "v0": "" if v0 is None else f"{v0.encoding}, {v0.meta.get('accuracy', '?')}, alpha {v0.alpha:g}",
                "placement": "" if v0 is None else placement,
+               "corners": ((args.corner_mode + (", with frontier" if args.corner_frontier else ""))
+                           if args.corners else "") if v0 is not None else "",
                **run(profile, all_worlds[wname], v0, PLACEMENTS.get(placement, {}), unknown or "occupied", nominal,
-                     kind)}
+                     kind, corner_kw=dict(corners=True, corner_theta=args.corner_theta, corner_mode=args.corner_mode,
+                                    corner_frontier=args.corner_frontier)
+                     if args.corners else None)}
         rows.append(row)
         print(" | ".join(f"{k} {v}" for k, v in row.items()), flush=True)
     out = Path(args.out)

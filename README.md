@@ -409,6 +409,7 @@ Decisions taken so far, with their reasons, so that they are not revisited by ac
 - `hj`: the classic HJ filter on the primitive values (`HJFilter`): nominal while the distance margin of U = min_i V_i (V / √α, in metres, the same for both encodings) stays above `margin`, else the HJ evasion. Not safe at leaking corners. `robust=True` adds the map clearance and the sampling gap between sub-steps.
 - `backup`: the backup filter (`BackupFilter`). It accepts the nominal control only if a safe backup maneuver exists afterwards.
 - `hj_backup`: the HJ filter proposes, the backup filter checks (`HJBackupFilter`). Its `margin` must be positive (default 2 cm), otherwise the backup filter always acts first.
+- Leaking corners: `corners=True` (any filter) corrects the union near the robot's corners with a stationary local update on a small window (fast-brt `fast_brt/corner.py`, [docs/13](docs/13_online_local_update.md)); `corner_mode` `sync`, `delayed` (simulation, with the solve latency) or `thread` (online). With it, `hj` no longer collides at corners (`hj_reach_target`: 7 → 0 collisions).
 
 **9. Dynamics order.** Constant-speed Dubins 3D comes first; its parameters will be swept later. Dubins 4D (QBot) follows, and a 6D drone after that.
 

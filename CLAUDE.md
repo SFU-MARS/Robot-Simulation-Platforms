@@ -17,6 +17,7 @@ Robots:
 | --- | --- |
 | Primitives, value functions, offline solves, local update | `fast-brt/` (submodule, SFU-MARS/fast-brt, branch `robot-sim`) |
 | Leaking-corner local update kernels | `fast-brt/HJ_local_update/` (submodule of fast-brt, SFU-MARS/HJ_local_update, branch `robot-sim`) |
+| Online leaking-corner correction (stationary local update, numpy) | `fast-brt/fast_brt/corner.py`; used by `nav_core/safety/scene.py` (`corners=True`), see `docs/13_online_local_update.md` |
 | Robot profiles, mapping, obstacle detection, nominal controllers, safety filters, simulation | `nav_core/` (this repository) |
 | ROS 2 integration | `ros2/fastbrt_nav/` (this repository) |
 
