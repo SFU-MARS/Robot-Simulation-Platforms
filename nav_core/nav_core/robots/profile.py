@@ -31,6 +31,7 @@ class SensorSpec:
     rate_hz: Optional[float]
     range_min: float = 0.0               # m
     height: Optional[float] = None       # m, scan plane above the floor
+    offset: Tuple[float, float] = (0.0, 0.0)   # m, sensor position in the robot frame (x forward, y left)
 
 
 @dataclass(frozen=True)
@@ -74,6 +75,14 @@ class RobotProfile:
     base_value: Optional[str]            # offline V0 file, absolute or relative to ``root``
     root: Optional[Path] = None          # the folder that holds robots/ (the repo root): relative paths start here
 
+    def sensor_pose(self, x) -> np.ndarray:
+        """Pose (x, y, theta) of the sensor for the robot pose x: the robot pose moved by ``sensor.offset``, which
+        is given in the robot frame. A scan is cast from, and integrated at, this pose."""
+        x = np.asarray(x, float)
+        ox, oy = self.sensor.offset
+        c, s = np.cos(x[2]), np.sin(x[2])
+        return np.array([x[0] + c * ox - s * oy, x[1] + s * ox + c * oy, x[2]])
+
     @property
     def units(self) -> Units:
         if self.dynamics == "dubins3d":
@@ -98,6 +107,13 @@ class RobotProfile:
                                  f"wheel_v_max = {p['wheel_v_max']} m/s")
 
 
+def _sensor(d: dict) -> SensorSpec:
+    d = dict(d)
+    if d.get("offset") is not None:
+        d["offset"] = tuple(float(v) for v in d["offset"])
+    return SensorSpec(**d)
+
+
 def load_profile(name_or_path) -> RobotProfile:
     """``name_or_path``: a robot name (robots/<name>.yaml) or a YAML path."""
     p = Path(name_or_path)
@@ -107,7 +123,7 @@ def load_profile(name_or_path) -> RobotProfile:
     m = d["map"]
     profile = RobotProfile(
         name=d["name"], status=d["status"], dynamics=d["dynamics"], phys=dict(d.get("phys") or {}),
-        footprint_radius=d["footprint_radius"], sensor=SensorSpec(**d["sensor"]), ctrl_dt=d["ctrl_dt"],
+        footprint_radius=d["footprint_radius"], sensor=_sensor(d["sensor"]), ctrl_dt=d["ctrl_dt"],
         map=MapSpec(origin=None if m["origin"] is None else tuple(m["origin"]),
                     size=None if m["size"] is None else tuple(m["size"]), resolution=m["resolution"]),
         world=d.get("world"), base_value=d.get("base_value"), root=p.resolve().parents[1])

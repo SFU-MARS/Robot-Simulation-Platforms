@@ -12,7 +12,9 @@ Otherwise the optimal control of the nearest primitive, w = w_max sign(dV/dtheta
 predicted sub-step (closed loop).  It is not safe on its own: the union of the primitive values leaks at the
 corners where faces meet (U > 0 at states that hit the corner), and the offline V0 underestimates the BRT (about
 0.09 turning radii in front of a face with the default low V0).  It is the baseline that the local update and
-the backup filter improve on.  With ``unknown="occupied"`` the frontier edges are primitives too.
+the backup filter improve on.  With ``unknown="occupied"`` the frontier edges are primitives too.  It corrects
+the leaking corners by default (``corners=True``, docs/13): without it, the union leaks by up to a turning radius
+at concave corners and the filter collides there.
 
 ``robust=True`` adds to ``margin`` what the classic filter leaves out: the map's ``clearance`` (as the backup
 filter) and the sampling gap between checked sub-steps.  Between two sub-steps dt apart the position moves at most
@@ -24,7 +26,9 @@ HJ evasion, as above), and the backup filter (``backup_filter.py``) applies them
 where they end; otherwise it executes the committed witness.  The HJ filter shapes when and how the robot turns
 away, the backup filter keeps it safe (also at leaking corners).  Its ``margin`` must be positive (default 2 cm,
 about 0.2 turning radii beyond the BRT): states with U <= 0 never have a witness, so the backup filter turns away
-first and with ``margin`` 0 the filter is the backup filter.  See ``scene.py`` for ``v0``, ``unknown``,
+first and with ``margin`` 0 the filter is the backup filter.  No corner correction by default (it does not change
+its safety, the backup filter already provides it; ``corners=True`` turns it on).  See ``scene.py`` for ``v0``,
+``unknown``,
 ``primitives`` and ``placement``.
 """
 
@@ -69,8 +73,8 @@ def model_margin(f, margin: float, robust: bool) -> float:
 class HJFilter(SceneFilter):
     uses_region = False
 
-    def __init__(self, profile, v0=None, margin: float = 0.0, robust: bool = False, **kw):
-        super().__init__(profile, v0, **kw)
+    def __init__(self, profile, v0=None, margin: float = 0.0, robust: bool = False, corners: bool = True, **kw):
+        super().__init__(profile, v0, corners=corners, **kw)
         self.margin, self.robust = margin, robust
         self.margin_model = model_margin(self, margin, robust)
 

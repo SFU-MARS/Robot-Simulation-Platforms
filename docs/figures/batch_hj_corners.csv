@@ -1,3 +1,3 @@
 world,range_m,nominal,filter,v0,placement,corners,episodes,reached,collision,timeout,init_failed,other,min_clearance_m,intervention_rate,median_time_to_goal_s,primitives_last,ms_per_step,corner_solves,corner_ms_per_step
-hj,0.8,mppi,"hj, unknown occupied","linear, low, alpha 20",inward,True,27,25,0,2,0,0,0.0125,0.033,18.3,13.2,202.6,3684,192.1
-occluded,0.8,mppi,"hj, unknown occupied","linear, low, alpha 20",inward,True,23,19,2,2,0,0,-0.0008,0.066,22.5,37.4,555.1,8973,515.7
+hj,0.8,mppi,"hj, unknown occupied","linear, low, alpha 20",inward,sync,26,22,2,2,0,0,-0.0018,0.056,18.4,13.3,150.4,2617,138.9
+occluded,0.8,mppi,"hj, unknown occupied","linear, low, alpha 20",inward,sync,23,20,0,3,0,0,0.0019,0.052,22.9,36.0,266.1,4533,228.3

@@ -65,13 +65,16 @@ def cases(world, profile, seed=1):
     return [(x0, g) for x0 in starts for g in goals if np.linalg.norm(x0[:2] - g) > 0.4]
 
 
-def run(profile, world, v0, kw, unknown="occupied", nominal="mppi", kind="backup", t_max=100.0, corner_kw=None):
+def run(profile, world, v0, kw, unknown="occupied", nominal="mppi", kind="backup", t_max=100.0, corner_kw=None,
+        margin=None):
     """One batch with filter ``kind`` (backup | hj | hj_backup | none); v0 and kw (placement) are ignored without a filter."""
     c, clr, interv, prims, t_goal, steps, t0 = collections.Counter(), np.inf, [], [], [], 0, time.perf_counter()
     solves, corner_s = 0, 0.0
     todo = cases(world, profile)
     for i, (x0, goal) in enumerate(todo):
-        gate = make_filter(profile, kind, v0, unknown=unknown, **(dict(kw, **(corner_kw or {})) if kind != "none" else {}))
+        extra = {} if margin is None else {"margin": margin}
+        gate = make_filter(profile, kind, v0, unknown=unknown,
+                           **(dict(kw, **(corner_kw or {}), **extra) if kind != "none" else {}))
         grid = None if world["grid"] is None else OccupancyGrid(*world["grid"], profile.map.resolution)
         nom = make_nominal(profile, nominal, **({"seed": i} if nominal == "mppi" else {}))
         ep = run_episode(profile, world["w"], x0, goal, nom, safety=gate, t_max=t_max, seed=i, grid=grid)
@@ -108,13 +111,16 @@ def main():
     ap.add_argument("--filters", nargs="+", default=["backup"], choices=["backup", "hj", "hj_backup", "none"])
     ap.add_argument("--ranges", nargs="+", type=float, default=[None],
                     help="LiDAR ranges (m) instead of the profile's")
-    ap.add_argument("--corners", action="store_true", help="correct the leaking corners (docs/13)")
+    ap.add_argument("--corners", action="store_true",
+                    help="correct the leaking corners (docs/13); without it the corners are off for every filter, also hj")
     ap.add_argument("--corner-theta", type=int, default=30, help="headings of the corner windows (default 30)")
     ap.add_argument("--corner-frontier", action="store_true",
                     help="also correct the corners with a frontier edge (default: only between obstacle faces)")
     ap.add_argument("--corner-mode", default="sync", choices=["sync", "delayed", "thread"],
                     help="when the corrected corners can be used: at once, after their solve time (simulated), "
                          "or from a background thread")
+    ap.add_argument("--margin", type=float, default=None,
+                    help="HJ margin (m) of hj and hj_backup (default: the filter's, 0 for hj, 0.02 for hj_backup)")
     ap.add_argument("--out", default=str(Path(__file__).resolve().parents[1] / "outputs" / "filter_batch.csv"))
     args = ap.parse_args()
 
@@ -135,10 +141,11 @@ def main():
                "placement": "" if v0 is None else placement,
                "corners": ((args.corner_mode + (", with frontier" if args.corner_frontier else ""))
                            if args.corners else "") if v0 is not None else "",
+               "margin_m": "" if args.margin is None or kind not in ("hj", "hj_backup") else args.margin,
                **run(profile, all_worlds[wname], v0, PLACEMENTS.get(placement, {}), unknown or "occupied", nominal,
                      kind, corner_kw=dict(corners=True, corner_theta=args.corner_theta, corner_mode=args.corner_mode,
                                     corner_frontier=args.corner_frontier)
-                     if args.corners else None)}
+                     if args.corners else dict(corners=False), margin=args.margin if kind in ("hj", "hj_backup") else None)}
         rows.append(row)
         print(" | ".join(f"{k} {v}" for k, v in row.items()), flush=True)
     out = Path(args.out)

@@ -152,9 +152,9 @@ V_BRT = max_u min_t ℓ(x(t))  ≤  min_t max_u ℓ(x(t)) = min_t V_BRS(t)
 
 重算频繁是因为地图每个周期都在变，尤其 frontier 每次扫描都往前推。每次重算要几百轮迭代把变化传开，每轮约 1.4 ms，已经接近 numpy 向量化的极限。在线（每周期 0.2 s）需要**异步**计算：算好之前用上一份窗口（或只用并集），由 backup 兜底。
 
-### 批量（MPPI + `hj`，unknown occupied，拐角修正 θ 30，2026-11-23）
+### 批量（MPPI + `hj`，unknown occupied，拐角修正 θ 30，机器人半径 0.105 m，2026-11-23）
 
-`experiments/filter_batch.py --filters hj --worlds hj occluded --corners --corner-theta 30`，原始数据 [`figures/batch_hj_corners.csv`](figures/batch_hj_corners.csv)。到达 / 碰撞 / 超时：
+`experiments/filter_batch.py --filters hj --worlds hj occluded --corners --corner-theta 30`（当时还修 frontier 拐角）。到达 / 碰撞 / 超时（半径改成 0.124 m 以后的数字见本节最后）：
 
 | 场景 | 不修正 | 修正 | 最小距离 | 拐角修正开销 |
 | --- | --- | --- | --- | --- |
@@ -180,9 +180,9 @@ V_BRT = max_u min_t ℓ(x(t))  ≤  min_t max_u ℓ(x(t)) = min_t V_BRS(t)
 
 在用上新解之前，`hj` 可能比同步版多漏一点（过时的窗口不包括刚长出来的那部分拐角）；`hj_backup` 和 `backup` 的安全仍然由 backup 保证。
 
-### 异步 + frontier 拐角修不修（2026-11-23）
+### 异步 + frontier 拐角修不修（机器人半径 0.105 m，2026-11-23）
 
-`filter_batch.py --filters hj hj_backup --worlds hj occluded --corners --corner-mode delayed [--corner-frontier]`，θ 30，MPPI，unknown occupied；原始数据 [`figures/batch_corners_delayed.csv`](figures/batch_corners_delayed.csv)。到达 / 碰撞 / 超时，括号里是介入率；最后一列是拐角计算每步的平均耗时：
+`filter_batch.py --filters hj hj_backup --worlds hj occluded --corners --corner-mode delayed [--corner-frontier]`，θ 30，MPPI，unknown occupied。到达 / 碰撞 / 超时，括号里是介入率；最后一列是拐角计算每步的平均耗时：
 
 | 场景 | filter | 不修正 | 同步，含 frontier | delayed，含 frontier | **delayed，只修障碍面之间** |
 | --- | --- | --- | --- | --- | --- |
@@ -196,6 +196,21 @@ V_BRT = max_u min_t ℓ(x(t))  ≤  min_t max_u ℓ(x(t)) = min_t V_BRS(t)
 - `hj_backup` 加上拐角修正后安全和到达不变（本来就 0 碰撞），HJ 介入变多（0.29 → 0.41）：拐角处的值更准、更保守，HJ 更早避让。
 - 剩下的 1 次 `hj` 碰撞和之前诊断的一样，是经典 `hj` 的局限，不是拐角漏。
 
+### 机器人半径改成 0.124 m 后重跑（2026-11-23）
+
+Burger 的位姿在轮轴中心，底盘后角离轴心 0.1237 m，`footprint_radius` 从 0.105 改成 0.124（包住整台车的圆）。所有批量重跑，原始数据 [`figures/batch_hj_corners.csv`](figures/batch_hj_corners.csv)（sync）、[`figures/batch_corners_delayed.csv`](figures/batch_corners_delayed.csv)（delayed）。hj 场景有一个起点离墙太近被筛掉，剩 26 次。MPPI，unknown occupied，θ 30，到达 / 碰撞 / 超时（介入率），最后是拐角计算每步的平均耗时：
+
+| 场景 | filter | 不修正 | sync，只修障碍面之间 | delayed，含 frontier | **delayed，只修障碍面之间** |
+| --- | --- | --- | --- | --- | --- |
+| hj（26 次） | `hj` | 19 / **7** / 0 | 22 / **2** / 2，139 ms | 22 / **2** / 2，123 ms | **22 / 2 / 2，90 ms** |
+| 遮挡（23 次） | `hj` | 22 / **1** / 0 | 20 / 0 / 3，228 ms | 19 / 0 / 4，189 ms | **20 / 0 / 3，118 ms** |
+| hj（26 次） | `hj_backup` | 15 / 0 / 11（0.34） | — | 15 / 0 / 11（0.43），74 ms | **15 / 0 / 11（0.43），55 ms** |
+| 遮挡（23 次） | `hj_backup` | 15 / 0 / 8（0.34） | — | 9 / 0 / 14（0.41），141 ms | **12 / 0 / 11（0.41），77 ms** |
+
+- **`hj_backup` 仍然在所有设置下 0 碰撞**；frontier 拐角不修仍然更省、到达更多，默认不变。
+- **`hj` 加修正后 hj 场景又有 2 次碰撞**（半径 0.105 时是 0）。`hj_failures.py --worlds hj --corners --corner-theta 30 --verbose` 把两次都判为 leaking corner，但漏得很少：进入真实 BRT 的那个周期，修正后的 U 只有 +0.121 和 +0.052（模型单位，即 5–12 mm），下一个周期就变成负的，经典 `hj` 再躲已经来不及。这个量级和拐角窗口的网格（1 cm）、建图栅格（2 cm）同级；半径变大后通道更窄，贴着拐角走的情况更多，原来的 0 次是踩着边过的。
+- **加 margin 不是免费的**（`filter_batch.py --filters hj --worlds hj pillar occluded --corners --corner-mode delayed --margin 0.02`）：hj 场景 24 / 0 / 2，柱子 26 / 0 / 2，遮挡 12 / **1** / 10。margin 让 `hj` 更早进入逃逸模式（介入率 0.41–0.46），在遮挡场景的拐角附近被困住、超时变多，还多了 1 次碰撞（margin 1 cm 时 hj 场景不撞了，遮挡场景撞 2 次）。所以 `hj` 的默认 margin 仍是 0：经典 `hj` 对这种毫米级的数值误差没有余量，也没有安全的恢复，这正是 `hj_backup` 用 backup 兜底的理由。
+
 ## 13.8 计划和进度
 
 | # | 内容 | 状态 |
@@ -204,12 +219,14 @@ V_BRT = max_u min_t ℓ(x(t))  ≤  min_t max_u ℓ(x(t)) = min_t V_BRS(t)
 | 2 | 稳态 local update `stationary_update`：残差（或几何）初始区域 + 阈值扩散 | ✅ L 形凹角上验证（13.6），阈值 1e-4 |
 | 3 | 直接求解参考 `direct_solve`：同一步进，推进 T ≥ 4；对比 2 的精度、点数、耗时 | ✅ 13.6 |
 | 4 | ✅ Robot-Sim：按拐角构造窗口（默认 dx = 0.1），窗口内 `U = min(并集, 修正值)`，`hj_margin` / `hj_control` 用修正值；按几何容差复用、热启动、异步（13.7） | ✅ sync / delayed / thread |
-| 5 | 闭环：`hj` 的 leaking corner 碰撞应消失；`hj_backup` 的介入更准；耗时 | ✅ hj 场景 7 → 0，遮挡 4 → 1（剩下的不是拐角）；异步可行 |
-| 6 | `thread` 模式在 ROS 节点里实跑；`corners` 是否设为 `hj` / `hj_backup` 的默认 | 待做 / 待定 |
+| 5 | 闭环：`hj` 的 leaking corner 碰撞应消失；`hj_backup` 的介入更准；耗时 | ✅ 半径 0.105：hj 场景 7 → 0，遮挡 4 → 1（剩下的不是拐角）；半径 0.124：hj 7 → 2（毫米级的残余漏），遮挡 1 → 0；异步可行 |
+| 6 | `thread` 模式在 ROS 节点里实跑（[14](14_ros2_desktop_test.md)）；默认值：`hj` 开、`hj_backup` 关 | 待上机 / ✅ |
 
 ## 13.9 决策记录
 
 - 2026-11-23：拐角窗口的 θ 默认 30 个点（仿真先用 30：最差误差约 4 mm，在 clearance 以内，比 60 快一倍）；`corner_theta=None` 用 V₀ 的 60。frontier 参与的拐角修不修，见下一条。
+- 2026-11-23：`hj` 默认开拐角修正（它的安全全靠这个），`hj_backup` 默认不开（安全不变，只会更多介入）；ROS 节点默认 `corner_mode="thread"`。
+- 2026-11-23：Burger 半径改成 0.124 m 后，`hj` + 拐角修正在 hj 场景有 2 次碰撞（修正后的值只漏 5–12 mm）。试过 margin 1 / 2 cm：hj 场景不撞了，但遮挡场景超时和碰撞变多，所以 `hj` 的默认 margin 保持 0，把它记成经典 `hj` 的局限；要安全保证用 `hj_backup`。
 - 2026-11-23：在线速度用异步（`corner_mode`：sync / delayed / thread）。
 - 2026-11-23：frontier 拐角修与不修的对比显示安全无差别、不修省 23–32% 计算，默认只修障碍面之间的拐角（用户本来就觉得每次扫描都重算代价太高）。
 - 2026-11-22：用户确认"先做直接求解，再接 local update"；随后讨论时间历史的问题，用户提出"假设 primitive 的 BRT 是收敛的"，据此改为稳态 local update（只用 V₀ 最后一层），直接求解作为参考。

@@ -1,9 +1,9 @@
 world,range_m,nominal,filter,v0,placement,corners,episodes,reached,collision,timeout,init_failed,other,min_clearance_m,intervention_rate,median_time_to_goal_s,primitives_last,ms_per_step,corner_solves,corner_ms_per_step
-hj,0.8,mppi,"hj, unknown occupied","linear, low, alpha 20",inward,"delayed, with frontier",27,25,0,2,0,0,0.0125,0.032,18.3,13.2,127.7,1582,116.8
-occluded,0.8,mppi,"hj, unknown occupied","linear, low, alpha 20",inward,"delayed, with frontier",23,20,1,2,0,0,-0.0013,0.05,25.3,39.1,232.0,2496,191.8
-hj,0.8,mppi,"hj_backup, unknown occupied","linear, low, alpha 20",inward,"delayed, with frontier",27,16,0,11,0,0,0.0401,0.405,18.0,12.1,94.6,1969,70.1
-occluded,0.8,mppi,"hj_backup, unknown occupied","linear, low, alpha 20",inward,"delayed, with frontier",23,13,0,10,0,0,0.032,0.406,37.2,34.9,175.4,3224,125.2
-hj,0.8,mppi,"hj, unknown occupied","linear, low, alpha 20",inward,"delayed, obstacle faces only",27,25,0,2,0,0,0.0125,0.031,18.3,13.2,101.0,1590,90.1
-occluded,0.8,mppi,"hj, unknown occupied","linear, low, alpha 20",inward,"delayed, obstacle faces only",23,21,1,1,0,0,-0.0005,0.051,27.2,38.9,170.9,2202,131.1
-hj,0.8,mppi,"hj_backup, unknown occupied","linear, low, alpha 20",inward,"delayed, obstacle faces only",27,16,0,11,0,0,0.0411,0.415,20.4,12.2,79.1,1923,54.8
-occluded,0.8,mppi,"hj_backup, unknown occupied","linear, low, alpha 20",inward,"delayed, obstacle faces only",23,13,0,10,0,0,0.0363,0.399,46.0,32.1,132.4,2894,85.3
+hj,0.8,mppi,"hj, unknown occupied","linear, low, alpha 20",inward,"delayed, with frontier",26,22,2,2,0,0,-0.0018,0.058,18.4,13.2,133.9,1418,122.6
+hj,0.8,mppi,"hj_backup, unknown occupied","linear, low, alpha 20",inward,"delayed, with frontier",26,15,0,11,0,0,0.04,0.429,17.6,12.4,98.7,1841,74.1
+occluded,0.8,mppi,"hj, unknown occupied","linear, low, alpha 20",inward,"delayed, with frontier",23,19,0,4,0,0,0.0192,0.058,22.6,34.6,225.4,2405,188.9
+occluded,0.8,mppi,"hj_backup, unknown occupied","linear, low, alpha 20",inward,"delayed, with frontier",23,9,0,14,0,0,0.0366,0.405,23.7,35.9,195.2,3342,141.2
+hj,0.8,mppi,"hj, unknown occupied","linear, low, alpha 20",inward,delayed,26,22,2,2,0,0,-0.0018,0.057,18.4,13.2,101.4,1463,90.2
+hj,0.8,mppi,"hj_backup, unknown occupied","linear, low, alpha 20",inward,delayed,26,15,0,11,0,0,0.0401,0.432,17.8,12.5,80.3,1740,55.4
+occluded,0.8,mppi,"hj, unknown occupied","linear, low, alpha 20",inward,delayed,23,20,0,3,0,0,0.011,0.056,22.9,35.0,154.2,2104,117.8
+occluded,0.8,mppi,"hj_backup, unknown occupied","linear, low, alpha 20",inward,delayed,23,12,0,11,0,0,0.0397,0.405,57.0,32.0,123.1,2750,76.6

@@ -21,6 +21,7 @@
 | [11 路线图](11_roadmap.md) | **进度总表**：已定的决策、已完成、进行中、待办、待讨论的问题 |
 | [12 local update 的 BRT 版本](12_local_update_brt.md) | BRS 为什么不能避障、为什么不能事后补成 BRT、HJ_local_update 改了什么、验证结果 |
 | [13 在线修 leaking corner](13_online_local_update.md) | 稳态 local update（只用收敛的 V₀，不要时间历史）：为什么改计划、收敛证据、插值风险、进度 |
+| [14 ROS 2 上机测试指南](14_ros2_desktop_test.md) | 给同事：desktop + Gazebo 上第一次实跑 `fastbrt_nav` 的步骤、测试项和预期、要交回的数据 |
 
 只想快速上手：读 [01](01_overview.md) 和 [07](07_mppi_walkthrough.md) 就够。想知道现在做到哪了：读 [11 路线图](11_roadmap.md)。
 

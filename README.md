@@ -136,14 +136,14 @@ In both modes the modelled obstacle is the complement of the region. Every detec
 PYTHONPATH=. python scripts/run_sim.py --filter backup [--unknown free]
 ```
 
-Burger, default start and goal (pursuit): the run reaches the goal at t ≈ 17.8 s, with 10 interventions in 89 periods and a 4.3 cm minimum clearance. Batches of random starts × goals (`experiments/filter_batch.py`, pursuit, the default V₀ and inward placement, 2026-11-22) gave these results (no collision with either filter mode):
+Burger, default start and goal (pursuit): the run reaches the goal at t ≈ 17.9 s, with 12 interventions in 90 periods and a 4.3 cm minimum clearance. Batches of random starts × goals (`experiments/filter_batch.py`, pursuit, the default V₀ and inward placement, robot radius 0.124 m, 2026-11-23) gave these results (no collision with either filter mode):
 
 | world | | reached | collision | timeout |
 | --- | --- | --- | --- | --- |
-| `hj_reach_target` (27 runs) | nominal only | 7 | 20 | 0 |
-| | unknown occupied | 16 | 0 | 11 |
-| | unknown free | 16 | 0 | 11 |
-| walls + free-standing pillar (28 runs) | nominal only | 19 | 9 | 0 |
+| `hj_reach_target` (26 runs) | nominal only | 8 | 18 | 0 |
+| | unknown occupied | 15 | 0 | 11 |
+| | unknown free | 15 | 0 | 11 |
+| walls + free-standing pillar (28 runs) | nominal only | 17 | 11 | 0 |
 | | unknown occupied | 28 | 0 | 0 |
 | | unknown free | 28 | 0 | 0 |
 
@@ -164,28 +164,30 @@ Batches of random starts × goals, with no filter and with the backup filter:
 
 | world | nominal | nominal only | + backup filter (unknown occupied) |
 | --- | --- | --- | --- |
-| `hj_reach_target` (27 runs) | pursuit | 7 reached, 20 collisions | 16 reached, 0 collisions, 11 timeouts (intervention rate 0.24) |
-| | mppi | 20 reached, 7 collisions | 16 reached, 0 collisions, 11 timeouts (0.049) |
-| walls + pillar (28 runs) | pursuit | 19 reached, 9 collisions | 28 reached (0.057) |
-| | mppi | 28 reached | 28 reached (0.004) |
+| `hj_reach_target` (26 runs) | pursuit | 8 reached, 18 collisions | 15 reached, 0 collisions, 11 timeouts (intervention rate 0.26) |
+| | mppi | 19 reached, 7 collisions | 15 reached, 0 collisions, 11 timeouts (0.080) |
+| walls + pillar (28 runs) | pursuit | 17 reached, 11 collisions | 28 reached (0.072) |
+| | mppi | 28 reached | 28 reached (0.015) |
 
-**Why the 13 timeouts in `hj_reach_target` do not go away with MPPI.** The robot model cannot stop: it always drives at constant speed and can only steer. The only way to "wait safely" is to drive in a tight circle (radius 0.1 m). The backup filter therefore accepts a command only if, afterwards, the robot still has a way to reach known free space wide enough to circle in. That takes about 0.45 m: the circle's 0.2 m diameter, plus the robot's width (2 × 0.105 m), plus a margin. The upper-left area of this world is reachable only through a 0.4 m gap between obstacle 1 and the north wall. The robot itself would fit, but it could not circle inside the gap, so the backup filter never lets it in. Exactly 11 of the 27 runs need that gap. This is a limit of the constant-speed model, not of the nominal controller. A robot that can brake (Dubins 4D, QBot) can "wait safely" by stopping and does not have it.
+The runs are those of [docs/10](docs/10_primitive_alpha_accuracy.md) whose start is at least the robot radius + 0.12 m from the obstacles: with the radius 0.124 m (since 2026-11-23, before 0.105 m) one start of `hj_reach_target` drops out.
+
+**Why the 11 timeouts in `hj_reach_target` do not go away with MPPI.** The robot model cannot stop: it always drives at constant speed and can only steer. The only way to "wait safely" is to drive in a tight circle (radius 0.1 m). The backup filter therefore accepts a command only if, afterwards, the robot still has a way to reach known free space wide enough to circle in. That takes about 0.49 m: the circle's 0.2 m diameter, plus the robot's width (2 × 0.124 m), plus a margin. The upper-left area of this world is reachable only through a 0.4 m gap between obstacle 1 and the north wall. The robot itself would fit, but it could not circle inside the gap, so the backup filter never lets it in. Exactly 11 of the 26 runs need that gap. This is a limit of the constant-speed model, not of the nominal controller. A robot that can brake (Dubins 4D, QBot) can "wait safely" by stopping and does not have it.
 
 **Occluded world and the two filter modes.** `worlds/occluded_4x4.world` is a 4 × 4 m arena with:
 - three screens, each with a box hidden right behind one of its ends;
 - three free-standing pillars.
 
-The sweep uses MPPI as the nominal controller and varies the LiDAR range. There are 23 runs per row: random starts × goals (`experiments/filter_batch.py --worlds occluded --ranges 0.3 0.5 0.8`, 2026-11-22).
+The sweep uses MPPI as the nominal controller and varies the LiDAR range. There are 23 runs per row: random starts × goals (`experiments/filter_batch.py --worlds occluded --ranges 0.3 0.5 0.8`, robot radius 0.124 m, 2026-11-23).
 
 | LiDAR range | no filter | unknown = occupied | unknown = free |
 | --- | --- | --- | --- |
-| 0.3 m (3 × turning radius) | 19 reached, 4 collisions | cannot start (23 runs) | 18 reached, **2 collisions**, 3 timeouts |
-| 0.5 m (5 ×) | 21 reached, 2 collisions | 17 reached, 0 collisions, 6 timeouts | 18 reached, 0 collisions, 5 timeouts |
-| 0.8 m (8 ×) | 19 reached, 4 collisions | 16 reached, 0 collisions, 7 timeouts | 16 reached, 0 collisions, 7 timeouts |
+| 0.3 m (3 × turning radius) | 20 reached, 3 collisions | cannot start (23 runs) | 15 reached, **8 collisions** |
+| 0.5 m (5 ×) | 20 reached, 3 collisions | 16 reached, 0 collisions, 7 timeouts | 17 reached, 0 collisions, 6 timeouts |
+| 0.8 m (8 ×) | 22 reached, 1 collision | 17 reached, 0 collisions, 6 timeouts | 17 reached, 0 collisions, 6 timeouts |
 
 How to read the table:
 - *`unknown = free` is not safe when the LiDAR range is short.* This mode treats unseen space as drivable, so the filter can approve a path into space that hides an obstacle. With a 0.3 m range, the obstacle is seen too late to turn away.
-- *`unknown = occupied` never collides, but needs a minimum range.* After the first scan, the known free space must already hold the circle the robot waits on: roughly LiDAR range ≥ robot radius + 2 × turning radius + margin ≈ 0.34 m. At 0.3 m it cannot start.
+- *`unknown = occupied` never collides, but needs a minimum range.* After the first scan, the known free space must already hold the circle the robot waits on: roughly LiDAR range ≥ robot radius + 2 × turning radius + margin ≈ 0.36 m. At 0.3 m it cannot start.
 - *At 5× and 8× the turning radius both modes are safe.* `free` was not faster (one run more at 0.5 m).
 
 **Obstacle layer.** `extract_obstacles(grid, offset=0)` returns the obstacles of the accumulated map (README, Design decisions 1–4):
@@ -254,7 +256,7 @@ Switching the default did not change the batch results of that time except the o
 `ros2/fastbrt_nav` runs the same loop as `nav_core.sim` against Gazebo (or a real robot):
 
 ```
-/scan, /odom → accumulated map → nominal (pursuit | mppi) → backup filter → /cmd_vel
+/scan, /odom → accumulated map → nominal (pursuit | mppi) → safety filter (backup | hj | hj_backup) → /cmd_vel
 ```
 
 Behaviour:
@@ -263,7 +265,7 @@ Behaviour:
 - It drives at the profile's constant speed. It stops (zero `cmd_vel`) before the first scan, at the goal, and if the filter cannot certify the start or fails.
 - It uses only `LaserScan`, `Odometry` and `Twist`, so the same code runs on Humble and Jazzy.
 
-It has not run in Gazebo yet. Only the message conversions (`fastbrt_nav/conversions.py`) are unit-tested, without ROS.
+On ROS 2 Humble (Ubuntu 22.04) it uses Gazebo Classic (`turtlebot3_controls/launch/hj_launch_world_classic.launch.py`, launch argument `gazebo:=classic`, the default on Humble); on Jazzy the new Gazebo (`gazebo:=gz`). It has not run in Gazebo yet. Without ROS, the message conversions are unit-tested and `test/test_node_without_ros.py` runs the whole node (rclpy and messages stubbed) in the simulated world with every filter. The step-by-step desktop test is [docs/14](docs/14_ros2_desktop_test.md).
 
 Build and run (from `turtlebot3/`, next to `turtlebot3_controls`):
 
@@ -280,9 +282,10 @@ ros2 launch fastbrt_nav fastbrt_nav.launch.py \
 
 Launch arguments:
 - `robot` (profile, default `burger`), `goal`;
-- `nominal` (`mppi` | `pursuit`), `filter` (`backup` | `none`), `unknown` (`occupied` | `free`), `primitives` (`faces` | `rings`), `v0` (V₀ file; default the profile's `base_value`);
+- `nominal` (`mppi` | `pursuit`), `filter` (`backup` | `hj` | `hj_backup` | `none`), `unknown` (`occupied` | `free`), `primitives` (`faces` | `rings`), `v0` (V₀ file; default the profile's `base_value`);
+- `corners` (`auto`: on for `hj` | `true` | `false`), `corner_mode` (`thread`, the corner windows solved on a background thread), `margin` (`hj` / `hj_backup` distance margin in m; < 0: the filter's default);
 - `map_origin` / `map_size` (default: the profile's map);
-- `log_path` (CSV of t, pose, w_nom, w and decision time per period).
+- `log_path` (CSV per period: t, pose, w_nom, w, decision time, intervened, interventions, corner windows in use, corner solves and their time).
 
 **Frames.** Gazebo's diff-drive odometry starts at the spawn pose. The launch file therefore passes `x_pose` / `y_pose` / `yaw_pose` to the node, which maps odometry to world coordinates. The map, the goal and the profile are in world coordinates. The map and markers are published in the `odom` frame.
 
@@ -310,7 +313,7 @@ export TURTLEBOT3_MODEL=burger
 ros2 launch turtlebot3_controls hj_launch_world.launch.py world:=turtlebot3_controls/hj_reach_target.world x_pose:=-0.8 y_pose:=-0.8 yaw_pose:=0.2
 ```
 
-The bridge (`turtlebot3_controls/params/turtlebot3_burger_bridge.yaml`) already forwards `/scan`, `/odom`, `/tf`, `/imu` and `cmd_vel`. The Burger's LDS-01 LiDAR has 360 beams, a 0.12–3.5 m range and a 5 Hz rate. The Burger profile cuts the range at 0.8 m in software, so that obstacles are discovered while driving.
+On Humble use `hj_launch_world_classic.launch.py` with the same arguments (Gazebo Classic; the `gazebo_ros` plugins publish `/scan` and `/odom` and subscribe to `/cmd_vel` directly, no bridge). On the new Gazebo, the bridge (`turtlebot3_controls/params/turtlebot3_burger_bridge.yaml`) forwards `/scan`, `/odom`, `/tf`, `/imu` and `cmd_vel`. The Burger's LDS-01 LiDAR has 360 beams, a 0.12–3.5 m range and a 5 Hz rate. The Burger profile cuts the range at 0.8 m in software, so that obstacles are discovered while driving.
 
 ### Launch simulation
 
@@ -409,7 +412,7 @@ Decisions taken so far, with their reasons, so that they are not revisited by ac
 - `hj`: the classic HJ filter on the primitive values (`HJFilter`): nominal while the distance margin of U = min_i V_i (V / √α, in metres, the same for both encodings) stays above `margin`, else the HJ evasion. Not safe at leaking corners. `robust=True` adds the map clearance and the sampling gap between sub-steps.
 - `backup`: the backup filter (`BackupFilter`). It accepts the nominal control only if a safe backup maneuver exists afterwards.
 - `hj_backup`: the HJ filter proposes, the backup filter checks (`HJBackupFilter`). Its `margin` must be positive (default 2 cm), otherwise the backup filter always acts first.
-- Leaking corners: `corners=True` (any filter) corrects the union near the robot's corners with a stationary local update on a small window (fast-brt `fast_brt/corner.py`, [docs/13](docs/13_online_local_update.md)); `corner_mode` `sync`, `delayed` (simulation, with the solve latency) or `thread` (online). With it, `hj` no longer collides at corners (`hj_reach_target`: 7 → 0 collisions).
+- Leaking corners: `corners=True` (any filter) corrects the union near the robot's corners with a stationary local update on a small window (fast-brt `fast_brt/corner.py`, [docs/13](docs/13_online_local_update.md)); `corner_mode` `sync`, `delayed` (simulation, with the solve latency) or `thread` (online). With it, `hj` collides far less at corners (`hj_reach_target`, robot radius 0.124 m: 7 → 2 collisions, the corrected value is off by 5–12 mm there; with 0.105 m it was 7 → 0). `hj_backup` and `backup` have no collision in any batch.
 
 **9. Dynamics order.** Constant-speed Dubins 3D comes first; its parameters will be swept later. Dubins 4D (QBot) follows, and a 6D drone after that.
 
@@ -418,7 +421,8 @@ Decisions taken so far, with their reasons, so that they are not revisited by ac
 **Integration**
 - [x] Add fast-brt as a submodule (`fast-brt/`, branch `robot-sim`), with HJ_local_update as its submodule (branch `robot-sim`); a recursive clone fetches all three levels
 - [ ] Pin the `optimized_dp` version fast-brt needs: the old `Grid(min, max, dims, pts, pDim)` signature, from before odp commit 689548e
-- [ ] Confirm the ROS 2 distro and Gazebo version on the simulation machine (`echo $ROS_DISTRO`, `lsb_release -rs`, `gz sim --version`); see Open questions.
+- [x] Confirm the ROS 2 distro and Gazebo version on the simulation machine: Ubuntu 22.04, Humble, Gazebo Classic 11 (`hj_launch_world_classic.launch.py`)
+- [ ] First run of `fastbrt_nav` in Gazebo Classic on the desktop ([docs/14](docs/14_ros2_desktop_test.md))
 - [ ] Register `optimized_dp` as a submodule. It is listed in `.gitmodules` but is not a gitlink in the tree, so a recursive clone does not fetch it.
 - [ ] Decide whether both `unitree_mujoco/` and `mujoco/unitree_mujoco/` are needed (they pin the same commit).
 
@@ -467,10 +471,6 @@ Decisions taken so far, with their reasons, so that they are not revisited by ac
 
 ## Open questions
 
-- **ROS 2 distro and Gazebo version.** The plan is Humble. However:
-  - the pinned `turtlebot3_simulations` commit (`main@9be186f`) depends on `gz_sim_vendor`, which exists only for Jazzy;
-  - Humble's apt `turtlebot3_gazebo` targets Gazebo Classic.
-
-  Which distro and which Gazebo does the simulation machine actually run? New code targets Python 3.10, so it runs on both.
+- **ROS 2 distro and Gazebo version.** Answered: the desktop runs Ubuntu 22.04 with Humble, so Gazebo Classic 11 with the apt `ros-humble-turtlebot3-gazebo`. The pinned `turtlebot3_simulations` commit (`main@9be186f`, `gz_sim_vendor`) is for Jazzy and is not built there; `hj_launch_world_classic.launch.py` loads the same worlds in Classic.
 - **HJ_local_update online.** The HeteroCL kernel needs the `odp` conda environment, but online code runs in the ROS 2 Python. A numpy implementation exists. Is it fast enough, or should the update run as a separate service, triggered by detection events?
 - **Crazyflie sensor and simulator.** Which simulator? Which sensor: an ideal LiDAR, or the 5-beam Multi-ranger deck?

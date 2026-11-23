@@ -139,19 +139,19 @@ loiter circle 需要的自由空间：
 
 ```
    圆直径              2R = 0.2 m
- + 车身两侧            2 × 0.105 m
+ + 车身两侧            2 × 0.124 m
  + clearance 余量      ≈ 0.04 m
- ≈ 0.45 m 宽
+ ≈ 0.49 m 宽
 ```
 
-`hj_reach_target` 里 obstacle 1 和北墙之间只有 **0.4 m**。机器人车身只有 0.21 m 宽，物理上过得去，但进去之后放不下 loiter circle，后路断了，**backup filter 永远不放行**。于是机器人在入口外绕圈直到超时。
+`hj_reach_target` 里 obstacle 1 和北墙之间只有 **0.4 m**。机器人（半径 0.124 m 的圆）只要 0.25 m 宽，物理上过得去，但进去之后放不下 loiter circle，后路断了，**backup filter 永远不放行**。于是机器人在入口外绕圈直到超时。
 
 这不是 bug，是 constant-speed 模型加 loiter 终端集合的固有保守性。**能刹车的 Dubins4D（QBot）没有这个问题**：它的后路可以是"直接停下"，不需要一块能绕圈的空地。
 
 同理，`unknown="occupied"` 要求**第一帧扫出的自由空间就能放下 loiter circle**，于是 lidar 量程有下限：
 
 ```
-range ≳ footprint_radius + 2 × 转弯半径 + 余量 ≈ 0.34 m（Burger）
+range ≳ footprint_radius + 2 × 转弯半径 + 余量 ≈ 0.36 m（Burger）
 ```
 
 量程 0.3 m 时遮挡场景 23 次实验全部 `init_failed`（机器人不出发，这是安全的失败方式）。
@@ -194,20 +194,20 @@ Burger 默认场景（pursuit，(−0.8, −0.8, 0.2) → (0.7, 0.2)）的余量
 
 `hj_backup` 在所有设置下都没有碰撞，余量越大 HJ 越早介入，太大时会超时。`hj` 的余量加大**不会变安全**：它一直处在逃逸模式里，`u*` 只顾最近的面，在拐角处被困住（下面的诊断）。
 
-批量对比（`experiments/filter_batch.py --filters backup hj hj_backup --nominals pursuit mppi`，unknown occupied，默认 `V₀`，默认 margin，2026-11-22），到达 / 碰撞 / 超时，括号里是介入率；原始数据 [`figures/batch_filter_modes.csv`](figures/batch_filter_modes.csv)：
+批量对比（`experiments/filter_batch.py --filters backup hj hj_backup --nominals pursuit mppi`，unknown occupied，默认 `V₀`，默认 margin，**不加拐角修正**，机器人半径 0.124 m，2026-11-23），到达 / 碰撞 / 超时，括号里是介入率；原始数据 [`figures/batch_filter_modes.csv`](figures/batch_filter_modes.csv)：
 
 | 场景 | nominal | `backup` | `hj` | `hj_backup`（margin 2 cm） |
 | --- | --- | --- | --- | --- |
-| hj（27 次） | pursuit | 16 / 0 / 11（0.24） | 17 / **10** / 0（0.19） | 15 / 0 / 12（0.47） |
-| | MPPI | 16 / 0 / 11（0.049） | 20 / **7** / 0（0.043） | 16 / 0 / 11（0.29） |
-| 柱子（28 次） | pursuit | 28 / 0 / 0（0.057） | 28 / 0 / 0（0.051），最小距离 0.3 cm | 28 / 0 / 0（0.16） |
-| | MPPI | 28 / 0 / 0（0.004） | 28 / 0 / 0（0.0） | 28 / 0 / 0（0.13） |
-| 遮挡（23 次） | pursuit | — | 18 / **5** / 0（0.15） | 16 / 0 / 7（0.42） |
-| | MPPI | 16 / 0 / 7（0.064） | 19 / **4** / 0（0.024） | 14 / 0 / 9（0.37） |
+| hj（26 次） | pursuit | 15 / 0 / 11（0.26） | 17 / **9** / 0（0.20） | 15 / 0 / 11（0.45） |
+| | MPPI | 15 / 0 / 11（0.080） | 19 / **7** / 0（0.029） | 15 / 0 / 11（0.34） |
+| 柱子（28 次） | pursuit | 28 / 0 / 0（0.072） | 27 / **1** / 0（0.069） | 28 / 0 / 0（0.22） |
+| | MPPI | 28 / 0 / 0（0.015） | 28 / 0 / 0（0.003） | 28 / 0 / 0（0.19） |
+| 遮挡（23 次） | pursuit | 19 / 0 / 4（0.19） | 20 / **3** / 0（0.16） | 13 / 0 / 10（0.46） |
+| | MPPI | 17 / 0 / 6（0.048） | 22 / **1** / 0（0.019） | 15 / 0 / 8（0.34） |
 
-- **`hj` 会撞**：hj 和遮挡场景都有碰撞，柱子场景（只有一个孤立障碍，没有拐角）没有。它从不超时，也最快（6–20 ms/step，backup 19–35 ms）。这就是 local update 要修的情况。
-- **`hj_backup` 和 `backup` 一样安全**：三个场景都没有碰撞，到达数和 `backup` 接近（遮挡场景 MPPI 少 2 次）。介入率高（0.13–0.47），因为 HJ 在 BRT 外 2 cm 就开始避让，每次 HJ 逃逸都算一次介入。
-- 以后接上 local update，`hj` 的碰撞应该消失，`hj_backup` 的 HJ 介入会更准，这是下一组对比实验。
+- **`hj` 会撞**：hj 和遮挡场景都有碰撞，柱子场景（只有一个孤立障碍）pursuit 也撞了 1 次。它从不超时，也最快（6–20 ms/step，backup 19–35 ms）。这就是 local update 要修的情况。
+- **`hj_backup` 和 `backup` 一样安全**：三个场景都没有碰撞，到达数和 `backup` 接近（遮挡场景少 2–6 次）。介入率高（0.19–0.46），因为 HJ 在 BRT 外 2 cm 就开始避让，每次 HJ 逃逸都算一次介入。
+- 加上拐角修正（local update）以后的对比见 [13](13_online_local_update.md) §13.7。
 
 ### `hj` 为什么会撞（`experiments/hj_failures.py`）
 

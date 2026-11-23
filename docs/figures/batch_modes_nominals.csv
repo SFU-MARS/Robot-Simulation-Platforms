@@ -1,13 +1,13 @@
-world,range_m,nominal,filter,v0,placement,episodes,reached,collision,timeout,init_failed,other,min_clearance_m,intervention_rate,median_time_to_goal_s,primitives_last,ms_per_step
-hj,0.8,pursuit,none,,,27,7,20,0,0,0,-0.002,0.0,8.9,0.0,2.7
-hj,0.8,mppi,none,,,27,20,7,0,0,0,-0.0008,0.0,14.6,0.0,5.4
-pillar,0.8,pursuit,none,,,28,19,9,0,0,0,-0.0016,0.0,9.1,0.0,2.8
-pillar,0.8,mppi,none,,,28,28,0,0,0,0,0.034,0.0,14.3,0.0,5.7
-hj,0.8,pursuit,"backup, unknown occupied","linear, low, alpha 20",inward,27,16,0,11,0,0,0.04,0.24,13.0,12.9,16.6
-hj,0.8,pursuit,"backup, unknown free","linear, low, alpha 20",inward,27,16,0,11,0,0,0.04,0.242,13.0,7.9,15.8
-hj,0.8,mppi,"backup, unknown occupied","linear, low, alpha 20",inward,27,16,0,11,0,0,0.04,0.049,13.1,12.8,20.0
-hj,0.8,mppi,"backup, unknown free","linear, low, alpha 20",inward,27,16,0,11,0,0,0.04,0.049,13.1,7.9,20.0
-pillar,0.8,pursuit,"backup, unknown occupied","linear, low, alpha 20",inward,28,28,0,0,0,0,0.033,0.057,12.8,15.6,17.7
-pillar,0.8,pursuit,"backup, unknown free","linear, low, alpha 20",inward,28,28,0,0,0,0,0.0321,0.059,12.7,6.0,17.4
-pillar,0.8,mppi,"backup, unknown occupied","linear, low, alpha 20",inward,28,28,0,0,0,0,0.0438,0.004,14.3,15.5,22.1
-pillar,0.8,mppi,"backup, unknown free","linear, low, alpha 20",inward,28,28,0,0,0,0,0.0438,0.004,14.3,6.1,21.4
+world,range_m,nominal,filter,v0,placement,corners,episodes,reached,collision,timeout,init_failed,other,min_clearance_m,intervention_rate,median_time_to_goal_s,primitives_last,ms_per_step,corner_solves,corner_ms_per_step
+hj,0.8,pursuit,none,,,,26,8,18,0,0,0,-0.0019,0.0,8.7,0.0,2.9,0,0.0
+hj,0.8,mppi,none,,,,26,19,7,0,0,0,-0.0017,0.0,13.7,0.0,5.6,0,0.0
+pillar,0.8,pursuit,none,,,,28,17,11,0,0,0,-0.0018,0.0,8.7,0.0,3.0,0,0.0
+pillar,0.8,mppi,none,,,,28,28,0,0,0,0,0.0002,0.0,14.2,0.0,6.0,0,0.0
+hj,0.8,pursuit,"backup, unknown occupied","linear, low, alpha 20",inward,,26,15,0,11,0,0,0.04,0.258,12.4,13.3,16.7,0,0.0
+hj,0.8,pursuit,"backup, unknown free","linear, low, alpha 20",inward,,26,15,0,11,0,0,0.04,0.262,12.4,8.1,16.0,0,0.0
+hj,0.8,mppi,"backup, unknown occupied","linear, low, alpha 20",inward,,26,15,0,11,0,0,0.0407,0.08,12.6,12.9,20.4,0,0.0
+hj,0.8,mppi,"backup, unknown free","linear, low, alpha 20",inward,,26,15,0,11,0,0,0.0407,0.084,12.6,7.9,20.8,0,0.0
+pillar,0.8,pursuit,"backup, unknown occupied","linear, low, alpha 20",inward,,28,28,0,0,0,0,0.0311,0.072,12.5,15.5,19.5,0,0.0
+pillar,0.8,pursuit,"backup, unknown free","linear, low, alpha 20",inward,,28,28,0,0,0,0,0.0311,0.073,12.5,6.3,18.6,0,0.0
+pillar,0.8,mppi,"backup, unknown occupied","linear, low, alpha 20",inward,,28,28,0,0,0,0,0.0468,0.015,14.2,15.4,22.4,0,0.0
+pillar,0.8,mppi,"backup, unknown free","linear, low, alpha 20",inward,,28,28,0,0,0,0,0.0468,0.015,14.2,6.4,21.4,0,0.0

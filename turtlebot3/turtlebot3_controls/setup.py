@@ -11,7 +11,7 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/launch',
-            ['launch/hj_launch_world.launch.py']),
+            ['launch/hj_launch_world.launch.py', 'launch/hj_launch_world_classic.launch.py']),
         ('share/' + package_name + '/worlds',
             ['hj_reach_target.world', 'worlds/occluded_4x4.world']),
         ('share/' + package_name + '/params',

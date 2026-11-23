@@ -75,10 +75,11 @@ def run_episode(profile, world: World, x0, goal, nominal, safety: Optional[Calla
     every = None if snapshot_every is None else max(1, int(round(snapshot_every / dt)))
     status = "timeout"
     for k in range(int(round(t_max / dt))):
-        ranges = world.raycast(x[:2], x[2] + angles, s.range)
+        xs = profile.sensor_pose(x)                  # the LiDAR is not at the wheel axle (profile sensor.offset)
+        ranges = world.raycast(xs[:2], xs[2] + angles, s.range)
         if noise_std > 0:
             ranges = ranges + rng.normal(0.0, noise_std, ranges.shape)
-        grid.integrate_scan(x, angles, ranges, s.range, s.range_min)
+        grid.integrate_scan(xs, angles, ranges, s.range, s.range_min)
         if tracker is not None:
             events += tracker.update(extract_obstacles(grid), t, grid.res)[1]
         if every is not None and k % every == 0:

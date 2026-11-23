@@ -87,23 +87,23 @@ CostMap 带缓存：只有 goal 或地图的 occupied 格子变化时才重算 D
 
 ### 效果
 
-2026-11-22 用迁移后的 backup filter、默认 `V₀`（线性 / low）和内移放置重跑（`experiments/filter_batch.py`，unknown occupied）：
+2026-11-23 用迁移后的 backup filter、默认 `V₀`（线性 / low）、内移放置和真实的机器人半径 0.124 m 重跑（`experiments/filter_batch.py`，unknown occupied；半径变大后 hj 场景有一个起点离墙太近被筛掉，剩 26 次）：
 
 | 场景 | 控制器 | 不加 filter | 加 backup filter |
 | --- | --- | --- | --- |
-| `hj_reach_target`（27 次） | pursuit | 7 到达，**20 撞** | 16 到达，0 撞，11 超时，介入率 0.24 |
-| | **MPPI** | 20 到达，**7 撞** | 16 到达，0 撞，11 超时，介入率 **0.049** |
-| 柱子场景（28 次） | pursuit | 19 到达，**9 撞** | 28 到达，介入率 0.057 |
-| | **MPPI** | 28 到达，0 撞 | 28 到达，介入率 **0.004**，最小距离 4.4 cm |
+| `hj_reach_target`（26 次） | pursuit | 8 到达，**18 撞** | 15 到达，0 撞，11 超时，介入率 0.26 |
+| | **MPPI** | 19 到达，**7 撞** | 15 到达，0 撞，11 超时，介入率 **0.080** |
+| 柱子场景（28 次） | pursuit | 17 到达，**11 撞** | 28 到达，介入率 0.072 |
+| | **MPPI** | 28 到达，0 撞 | 28 到达，介入率 **0.015**，最小距离 4.7 cm |
 
 两个结论：
 
-- **MPPI 明显更好**：不加 filter 时碰撞大幅减少；加上 filter 后介入率低得多（hj 场景 0.049 对 0.24，柱子场景 0.004 对 0.057）。
+- **MPPI 明显更好**：不加 filter 时碰撞大幅减少；加上 filter 后介入率低得多（hj 场景 0.080 对 0.26，柱子场景 0.015 对 0.072）。
 - **MPPI 自己仍然会撞**（hj 场景 7 次），所以 filter 仍然必要。
 
 ### 超时与 nominal 无关
 
-`hj_reach_target` 里 11 次超时，换成 MPPI 也没减少。原因已经查清：那个场景左上角只能通过 obstacle 1 和北墙之间一条 **0.4 m 宽**的缝进去，而 loiter circle 需要约 0.45 m，filter 永远不放机器人进去。27 次实验里恰好有 11 次需要过这条缝，数字完全对上。这是 constant-speed 模型的结构性限制，不是 nominal 的问题（见 [05](05_safety_filter.md) §5.6）。
+`hj_reach_target` 里 11 次超时，换成 MPPI 也没减少。原因已经查清：那个场景左上角只能通过 obstacle 1 和北墙之间一条 **0.4 m 宽**的缝进去，而 loiter circle 需要约 0.49 m，filter 永远不放机器人进去。26 次实验里恰好有 11 次需要过这条缝，数字完全对上。这是 constant-speed 模型的结构性限制，不是 nominal 的问题（见 [05](05_safety_filter.md) §5.6）。
 
 ## 4.4 扩展到其它 dynamics
 

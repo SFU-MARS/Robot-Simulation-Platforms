@@ -60,3 +60,45 @@ def segments_points(segments) -> list:
     for a, b in segments:
         pts += [(float(a[0]), float(a[1])), (float(b[0]), float(b[1]))]
     return pts
+
+
+def stamp_seconds(sec: int, nanosec: int) -> float:
+    """A ROS time stamp (builtin_interfaces/Time) in seconds."""
+    return float(sec) + 1e-9 * float(nanosec)
+
+
+class PoseHistory:
+    """Recent world-frame poses (x, y, theta) with their times, to find the pose at a scan's time stamp: a scan
+    can be up to a control period old when it is used, and the robot turns at up to w_max meanwhile."""
+
+    def __init__(self, keep: float = 2.0):
+        self.keep = keep
+        self.times, self.poses = [], []
+
+    def __len__(self) -> int:
+        return len(self.times)
+
+    def add(self, t: float, pose) -> None:
+        if self.times and t < self.times[-1]:          # time went back (simulation reset): start over
+            self.times, self.poses = [], []
+        self.times.append(float(t))
+        self.poses.append(np.asarray(pose, float).copy())
+        while len(self.times) > 2 and self.times[-1] - self.times[0] > self.keep:
+            self.times.pop(0)
+            self.poses.pop(0)
+
+    def at(self, t: float) -> np.ndarray:
+        """Pose at time t: linear between the two poses around it (theta the short way round), the first or last
+        pose outside the history."""
+        if not self.times:
+            raise ValueError("no pose yet")
+        k = int(np.searchsorted(self.times, t))
+        if k <= 0:
+            return self.poses[0].copy()
+        if k >= len(self.times):
+            return self.poses[-1].copy()
+        t0, t1 = self.times[k - 1], self.times[k]
+        a, b = self.poses[k - 1], self.poses[k]
+        w = 0.0 if t1 <= t0 else (t - t0) / (t1 - t0)
+        dth = (b[2] - a[2] + np.pi) % (2 * np.pi) - np.pi
+        return np.array([a[0] + w * (b[0] - a[0]), a[1] + w * (b[1] - a[1]), a[2] + w * dth])

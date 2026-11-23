@@ -8,12 +8,16 @@ phys:
                                  # has no certified loiter circle at the start
   track_width: 0.160             # m, wheel separation (differential drive)
   wheel_v_max: 0.22              # m/s, wheel speed limit: needs v + w_max * track_width / 2 <= this
-footprint_radius: 0.105          # m
+footprint_radius: 0.124          # m, circle around the wheel axle centre (the pose) that holds the whole
+                                 # robot: the 14 cm chassis box is centred 3.2 cm behind the axle, so its rear
+                                 # corners are hypot(0.102, 0.07) = 0.1237 m away (wheels: 0.095 m)
 sensor:
   type: lidar2d                  # LDS-01
   range: 0.8                     # m, software cut-off (hardware reaches 3.5 m)
   range_min: 0.12                # m, LDS-01 minimum range
   height: 0.17                   # m, scan plane above the floor (approx. base_scan)
+  offset: [-0.032, 0.0]          # m, LiDAR position in the robot frame (base_footprint, the wheel axle centre):
+                                 # lidar_joint of the TurtleBot3 Gazebo model and URDF, 3.2 cm behind the axle
   fov: 6.283185307179586         # rad
   n_rays: 360
   rate_hz: 5.0                   # real LDS-01 rate

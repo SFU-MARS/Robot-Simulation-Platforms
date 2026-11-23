@@ -16,7 +16,7 @@ phys:
   w_max: 1.0                     # rad/s，转弯半径 v / w_max = 0.1 m
   track_width: 0.160             # m，轮距（differential drive）
   wheel_v_max: 0.22              # m/s，单轮速度上限
-footprint_radius: 0.105          # m
+footprint_radius: 0.124          # m，以轮轴中心（位姿）为圆心、包住整台车的圆：14 cm 的底盘中心在轴后 3.2 cm，后角离轴心 0.1237 m
 sensor:
   type: lidar2d                  # LDS-01
   range: 0.8                     # m，软件截断（硬件能到 3.5 m）

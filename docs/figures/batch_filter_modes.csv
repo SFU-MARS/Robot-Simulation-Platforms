@@ -1,13 +1,19 @@
-world,range_m,nominal,filter,v0,placement,episodes,reached,collision,timeout,init_failed,other,min_clearance_m,intervention_rate,median_time_to_goal_s,primitives_last,ms_per_step
-hj,0.8,pursuit,"hj, unknown occupied","linear, low, alpha 20",inward,27,17,10,0,0,0,-0.0023,0.188,12.7,12.1,6.2
-hj,0.8,pursuit,"hj_backup, unknown occupied","linear, low, alpha 20",inward,27,15,0,12,0,0,0.0401,0.466,13.9,13.3,17.6
-hj,0.8,mppi,"hj, unknown occupied","linear, low, alpha 20",inward,27,20,7,0,0,0,-0.0024,0.043,14.6,12.4,8.8
-hj,0.8,mppi,"hj_backup, unknown occupied","linear, low, alpha 20",inward,27,16,0,11,0,0,0.0402,0.294,15.5,12.3,19.1
-pillar,0.8,pursuit,"hj, unknown occupied","linear, low, alpha 20",inward,28,28,0,0,0,0,0.0032,0.051,12.4,15.6,6.5
-pillar,0.8,pursuit,"hj_backup, unknown occupied","linear, low, alpha 20",inward,28,28,0,0,0,0,0.0453,0.164,15.1,15.6,18.0
-pillar,0.8,mppi,"hj, unknown occupied","linear, low, alpha 20",inward,28,28,0,0,0,0,0.034,0.0,14.3,15.5,9.2
-pillar,0.8,mppi,"hj_backup, unknown occupied","linear, low, alpha 20",inward,28,28,0,0,0,0,0.0443,0.127,17.3,15.3,21.0
-occluded,0.8,pursuit,"hj, unknown occupied","linear, low, alpha 20",inward,23,18,5,0,0,0,-0.0009,0.147,20.5,35.7,14.0
-occluded,0.8,pursuit,"hj_backup, unknown occupied","linear, low, alpha 20",inward,23,16,0,7,0,0,0.0301,0.418,24.7,37.0,29.2
-occluded,0.8,mppi,"hj, unknown occupied","linear, low, alpha 20",inward,23,19,4,0,0,0,-0.0014,0.024,23.3,36.0,20.3
-occluded,0.8,mppi,"hj_backup, unknown occupied","linear, low, alpha 20",inward,23,14,0,9,0,0,0.0336,0.368,36.8,37.3,35.4
+world,range_m,nominal,filter,v0,placement,corners,episodes,reached,collision,timeout,init_failed,other,min_clearance_m,intervention_rate,median_time_to_goal_s,primitives_last,ms_per_step,corner_solves,corner_ms_per_step
+hj,0.8,pursuit,"backup, unknown occupied","linear, low, alpha 20",inward,,26,15,0,11,0,0,0.04,0.258,12.4,13.3,16.8,0,0.0
+hj,0.8,pursuit,"hj, unknown occupied","linear, low, alpha 20",inward,,26,17,9,0,0,0,-0.0023,0.2,12.9,13.1,6.8,0,0.0
+hj,0.8,pursuit,"hj_backup, unknown occupied","linear, low, alpha 20",inward,,26,15,0,11,0,0,0.04,0.453,14.1,12.9,18.2,0,0.0
+hj,0.8,mppi,"backup, unknown occupied","linear, low, alpha 20",inward,,26,15,0,11,0,0,0.0407,0.08,12.6,12.9,20.4,0,0.0
+hj,0.8,mppi,"hj, unknown occupied","linear, low, alpha 20",inward,,26,19,7,0,0,0,-0.0022,0.029,13.7,12.7,9.6,0,0.0
+hj,0.8,mppi,"hj_backup, unknown occupied","linear, low, alpha 20",inward,,26,15,0,11,0,0,0.04,0.335,14.4,12.1,20.9,0,0.0
+pillar,0.8,pursuit,"backup, unknown occupied","linear, low, alpha 20",inward,,28,28,0,0,0,0,0.0311,0.072,12.5,15.5,18.9,0,0.0
+pillar,0.8,pursuit,"hj, unknown occupied","linear, low, alpha 20",inward,,28,27,1,0,0,0,-0.0003,0.069,11.3,15.2,7.7,0,0.0
+pillar,0.8,pursuit,"hj_backup, unknown occupied","linear, low, alpha 20",inward,,28,28,0,0,0,0,0.0322,0.222,16.0,15.7,19.7,0,0.0
+pillar,0.8,mppi,"backup, unknown occupied","linear, low, alpha 20",inward,,28,28,0,0,0,0,0.0468,0.015,14.2,15.4,22.1,0,0.0
+pillar,0.8,mppi,"hj, unknown occupied","linear, low, alpha 20",inward,,28,28,0,0,0,0,0.0159,0.003,14.2,15.5,10.2,0,0.0
+pillar,0.8,mppi,"hj_backup, unknown occupied","linear, low, alpha 20",inward,,28,28,0,0,0,0,0.0508,0.189,19.0,15.3,22.7,0,0.0
+occluded,0.8,pursuit,"backup, unknown occupied","linear, low, alpha 20",inward,,23,19,0,4,0,0,0.0301,0.185,27.2,39.2,29.4,0,0.0
+occluded,0.8,pursuit,"hj, unknown occupied","linear, low, alpha 20",inward,,23,20,3,0,0,0,-0.0012,0.155,21.9,35.0,14.5,0,0.0
+occluded,0.8,pursuit,"hj_backup, unknown occupied","linear, low, alpha 20",inward,,23,13,0,10,0,0,0.0319,0.46,22.5,36.8,30.3,0,0.0
+occluded,0.8,mppi,"backup, unknown occupied","linear, low, alpha 20",inward,,23,17,0,6,0,0,0.0339,0.048,23.2,35.6,35.8,0,0.0
+occluded,0.8,mppi,"hj, unknown occupied","linear, low, alpha 20",inward,,23,22,1,0,0,0,-0.0001,0.019,28.5,35.4,21.8,0,0.0
+occluded,0.8,mppi,"hj_backup, unknown occupied","linear, low, alpha 20",inward,,23,15,0,8,0,0,0.0308,0.344,32.0,38.4,36.3,0,0.0

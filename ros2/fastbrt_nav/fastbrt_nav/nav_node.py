@@ -6,15 +6,25 @@ The same loop as ``nav_core.sim.run_episode``, wired to ROS 2 (Humble or Jazzy):
   /scan, /odom --> accumulated occupancy grid --> nominal (pursuit | MPPI)
                --> safety filter (optional: backup | hj | hj_backup) --> /cmd_vel
 
-Every control period (the profile's ctrl_dt) the node integrates the latest
-scan at the latest pose, decides the turn rates for the period, and publishes
-them on a sub-period timer (the backup filter returns zero-order-hold rates for
-its sub-steps).  Linear speed is the profile's constant v while driving and 0
+Every control period (the profile's ctrl_dt) the node integrates every scan
+received since the last period, each at the LiDAR's pose at the scan's time
+stamp (the odometry history interpolated at that time, moved by the profile's
+``sensor.offset``: the Burger's LiDAR is 3.2 cm behind the wheel axle), decides
+the turn rates for the period from the newest pose, and publishes
+them on a sub-period timer (the filters return zero-order-hold rates for their
+sub-steps; the timer picks the rate by the time since the period started, so
+the order in which the two timers fire does not matter).  Linear speed is the profile's constant v while driving and 0
 before the start, at the goal, and after a filter failure.
 
-Needs ``nav_core`` on PYTHONPATH; the backup filter also needs fast-brt's
-``fast_brt.query`` (on PYTHONPATH, or the fast-brt submodule of the repo) and
-the profile's V0 file (``base_value``, or the ``v0`` parameter).
+Needs ``nav_core`` on PYTHONPATH; the filters also need fast-brt's
+``fast_brt.query`` and ``fast_brt.corner`` (numpy only; on PYTHONPATH, or the
+fast-brt submodule of the repo) and the profile's V0 file (``base_value``, or
+the ``v0`` parameter; ``nav_core/scripts/fetch_v0.py`` downloads it).
+
+Leaking corners (docs/13): ``corners`` "auto" uses the filter's default (on
+for hj, off for backup and hj_backup), "true" / "false" override it. Online the
+corner windows are solved on a background thread (``corner_mode`` "thread"):
+until a window is ready the filter uses the previous one, or the union only.
 Odometry starts at the spawn pose: pass the spawn pose as parameters.
 
 Published for RViz (frame ``world_frame``): ``map`` (nav_msgs/OccupancyGrid)
@@ -22,7 +32,10 @@ and ``fastbrt_markers`` (obstacle faces, convex / concave corners, filter
 region).  ``obstacle_events`` (std_msgs/String, one JSON object per event):
 obstacle detection events with stable ids (new / updated / merged / split /
 removed), faces with lengths, and corners, in world coordinates.
-``log_path``: CSV of t, x, y, theta, w_nom, w per period.
+``log_path``: CSV per period: t, x, y, theta, w_nom, w, decide_s (seconds to
+decide), scan_age (seconds since the newest integrated scan), intervened, interventions, corner_windows (in use), corner_solves,
+corner_seconds (cumulative solve time). ``fastbrt_markers`` also shows the
+usable part of every corrected corner window (green squares).
 """
 
 from __future__ import annotations
@@ -46,7 +59,8 @@ from nav_core.mapping import FREE, OCCUPIED, UNKNOWN, ObstacleTracker, Occupancy
 from nav_core.nominal import make_nominal
 from nav_core.robots import load_profile
 
-from .conversions import odom_to_world, occupancy_data, scan_arrays, segments_points, yaw_from_quaternion
+from .conversions import (PoseHistory, odom_to_world, occupancy_data, scan_arrays, segments_points, stamp_seconds,
+                          yaw_from_quaternion)
 
 
 class FastBrtNav(Node):
@@ -61,7 +75,10 @@ class FastBrtNav(Node):
         P("filter", "backup")                     # none | backup | hj | hj_backup
         P("unknown", "occupied")                  # backup filter mode: occupied | free
         P("primitives", "faces")                  # backup filter primitives: faces | rings
-        P("v0", "")                               # backup filter V0 file; "": the profile's base_value
+        P("v0", "")                               # filter V0 file; "": the profile's base_value
+        P("corners", "auto")                      # leaking-corner correction: auto (filter default) | true | false
+        P("corner_mode", "thread")                # thread (online) | sync | delayed
+        P("margin", -1.0)                         # hj / hj_backup distance margin (m); < 0: the filter's default
         P("map_origin", [0.0, 0.0])               # with map_size: override the profile's map
         P("map_size", [0.0, 0.0])
         P("world_frame", "odom")                  # frame of the published map / markers (the odom frame)
@@ -81,13 +98,23 @@ class FastBrtNav(Node):
         self.safety = None
         if g("filter") != "none":
             from nav_core.safety import make_filter
-            self.safety = make_filter(self.profile, g("filter"), g("v0") or None, unknown=g("unknown"),
-                                      primitives=g("primitives"))
+            kw = dict(unknown=g("unknown"), primitives=g("primitives"), corner_mode=g("corner_mode"))
+            corners = str(g("corners")).lower()
+            if corners in ("true", "false"):
+                kw["corners"] = corners == "true"
+            elif corners != "auto":
+                raise ValueError(f"corners must be auto, true or false, got {g('corners')!r}")
+            if g("filter") in ("hj", "hj_backup") and float(g("margin")) >= 0:
+                kw["margin"] = float(g("margin"))
+            self.safety = make_filter(self.profile, g("filter"), g("v0") or None, **kw)
 
-        self.pose = None                          # world frame (x, y, theta)
-        self.scan = None                          # (angles, ranges) of the newest scan
+        self.pose = None                          # world frame (x, y, theta), newest
+        self.history = PoseHistory()              # recent poses with their time stamps
+        self.scans = []                           # scans not integrated yet: (time stamp, angles, ranges)
+        self.scan_time = None                     # time stamp of the newest integrated scan
         self.state = "waiting"                    # waiting | driving | reached | stopped
-        self.queue = []                           # turn rates left for this period
+        self.queue = []                           # turn rates of this period, one per sub-step
+        self.period_start = 0.0                   # time (s) the rates of this period start
         self.log = []
         self.log_path = g("log_path")
         self.t0 = None
@@ -108,28 +135,35 @@ class FastBrtNav(Node):
         self.get_logger().info(
             f"robot {self.profile.name}: v {self.profile.phys['v']} m/s, w_max {self.profile.phys['w_max']} rad/s, "
             f"sensing {self.profile.sensor.range} m, ctrl {dt} s; nominal {g('nominal')}, filter {g('filter')} "
-            f"({g('unknown')}, {g('primitives')}); goal {self.goal.tolist()}")
+            f"({g('unknown')}, {g('primitives')}, corners "
+            f"{getattr(self.safety, 'corners', False)} {g('corner_mode')}); goal {self.goal.tolist()}")
 
     # -- inputs
     def on_odom(self, msg: Odometry):
         q = msg.pose.pose.orientation
         p = msg.pose.pose.position
         self.pose = odom_to_world((p.x, p.y, yaw_from_quaternion(q.x, q.y, q.z, q.w)), self.spawn)
+        self.history.add(stamp_seconds(msg.header.stamp.sec, msg.header.stamp.nanosec), self.pose)
 
     def on_scan(self, msg: LaserScan):
-        self.scan = scan_arrays(msg.angle_min, msg.angle_increment, msg.ranges, msg.range_min, msg.range_max,
-                                self.profile.sensor.range)
+        angles, ranges = scan_arrays(msg.angle_min, msg.angle_increment, msg.ranges, msg.range_min, msg.range_max,
+                                     self.profile.sensor.range)
+        self.scans.append((stamp_seconds(msg.header.stamp.sec, msg.header.stamp.nanosec), angles, ranges))
+        del self.scans[:-10]                      # at most 10 pending (2 s at 5 Hz)
 
     # -- control
     def on_control(self):
         if self.state in ("reached", "stopped"):
             return
-        if self.pose is None or self.scan is None:
+        if self.pose is None or (self.scan_time is None and not self.scans):
             return
         x = self.pose.copy()
         s = self.profile.sensor
-        angles, ranges = self.scan
-        self.grid.integrate_scan(x, angles, ranges, s.range, s.range_min)
+        for stamp, angles, ranges in self.scans:  # each scan at the LiDAR pose at its own time
+            pose = self.history.at(stamp) if len(self.history) else x
+            self.grid.integrate_scan(self.profile.sensor_pose(pose), angles, ranges, s.range, s.range_min)
+            self.scan_time = stamp
+        self.scans = []
         self.obstacles, events = self.tracker.update(extract_obstacles(self.grid), self.elapsed(), self.grid.res)
         for e in events:
             self.event_pub.publish(String(data=json.dumps(e.to_dict())))
@@ -139,6 +173,7 @@ class FastBrtNav(Node):
             return
         t = time.perf_counter()
         w_nom = self.nominal.control(x, self.goal, self.grid)
+        before = getattr(self.safety, "interventions", 0)
         try:
             ws = np.atleast_1d(w_nom if self.safety is None else self.safety(x, w_nom, self.grid))
         except RuntimeError as e:                 # no certificate at the start, unsupported case, filter failure
@@ -146,9 +181,18 @@ class FastBrtNav(Node):
             return
         w_max = self.profile.phys["w_max"]
         self.queue = [float(np.clip(w, -w_max, w_max)) for w in ws]
+        self.period_start = self.get_clock().now().nanoseconds * 1e-9
         if self.state == "waiting":
             self.state = "driving"
-        self.log.append((self.elapsed(), *x.tolist(), float(w_nom), self.queue[0], time.perf_counter() - t))
+        self.publish_rate()                       # the first rate at once
+        f = self.safety
+        model = getattr(f, "model", None)
+        now = self.get_clock().now().nanoseconds * 1e-9
+        self.log.append((self.elapsed(), *x.tolist(), float(w_nom), self.queue[0], time.perf_counter() - t,
+                         round(now - self.scan_time, 3),
+                         int(getattr(f, "interventions", 0) > before), getattr(f, "interventions", 0),
+                         len(getattr(model, "corners", []) or []), getattr(f, "corner_solves", 0),
+                         round(getattr(f, "corner_seconds", 0.0), 3)))
         self.publish_viz()
 
     def elapsed(self) -> float:
@@ -159,10 +203,18 @@ class FastBrtNav(Node):
         return now - self.t0
 
     def on_sub_step(self):
+        self.publish_rate()
+
+    def publish_rate(self):
+        """The rate of the current sub-step, chosen by the time since the period started (not popped from a queue:
+        the two timers can fire in either order at a period boundary); after the last sub-step the last rate is
+        held until the next period."""
         cmd = Twist()
         if self.state == "driving" and self.queue:
+            now = self.get_clock().now().nanoseconds * 1e-9
+            k = int((now - self.period_start) / self.sub_dt + 1e-6)
             cmd.linear.x = float(self.profile.phys["v"])
-            cmd.angular.z = self.queue.pop(0)
+            cmd.angular.z = self.queue[min(max(k, 0), len(self.queue) - 1)]
         self.cmd_pub.publish(cmd)
 
     def finish(self, state: str, message: str):
@@ -177,7 +229,8 @@ class FastBrtNav(Node):
             return
         with open(self.log_path, "w", newline="") as f:
             w = csv.writer(f)
-            w.writerow(["t", "x", "y", "theta", "w_nom", "w", "decide_s"])
+            w.writerow(["t", "x", "y", "theta", "w_nom", "w", "decide_s", "scan_age", "intervened", "interventions",
+                        "corner_windows", "corner_solves", "corner_seconds"])
             w.writerows(self.log)
         self.get_logger().info(f"wrote {self.log_path}")
 
@@ -209,6 +262,14 @@ class FastBrtNav(Node):
                                        (0.9, 0.1, 0.1), stamp))
         arr.markers.append(self.points(3, "concave_corners", [c.point for c in om.corners if not c.convex],
                                        (0.9, 0.6, 0.1), stamp))
+        boxes = []                                # usable part of the corrected corner windows (model -> world)
+        model = getattr(self.safety, "model", None)
+        for w in getattr(model, "corners", []) or []:
+            c = self.profile.units.pos_to_phys(np.asarray(w.grid.center))
+            h = float(self.profile.units.pos_to_phys(w.grid.half - w.edge))
+            pts = [c + np.array(d) * h for d in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+            boxes += [(pts[k], pts[(k + 1) % 4]) for k in range(4)]
+        arr.markers.append(self.lines(4, "corner_windows", boxes, (0.1, 0.7, 0.3), stamp))
         self.marker_pub.publish(arr)
 
     def world_to_frame(self, xy):

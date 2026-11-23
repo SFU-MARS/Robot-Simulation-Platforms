@@ -116,18 +116,22 @@
 - [X] local update 的 BRT 版本（HJ_local_update `robot-sim` 分支，`brt=True`）：每个被更新的点再取 `min(V, V(t=0))`；numpy 版在本地验证过，和整体 BRT 求解**符号完全一致**（L 形两条线：并集漏 74 格，local update 后 0 格）；fast-brt 新增 `target_set_mode="brt"` 和 `local_update_impl="numpy"`。原因和改动见 [12](12_local_update_brt.md)；
 - [ ] 在 mars-14 上验证 HeteroCL 版的 BRT local update，并测实时性（`pytest -m slow -k tube`、`experiments/local_update_timing.py`）；
 - [ ] local update 目前只能用一阶格式（和 primitive library 的格式必须一致，否则修正区域会扩张到整张网格）；要用二阶，得改 kernel（ENO2 + RK2）。稳态版也用一阶步进（和 low 的 V₀ 一致）；
-- [X] **local update 接入在线流程（见 [13](13_online_local_update.md)）**：`SceneFilter(corners=True, corner_mode="sync" | "delayed" | "thread")`，默认 θ 30、只修障碍面之间的拐角；`hj` 的拐角碰撞在批量里消失（hj 场景 7 → 0，遮挡 4 → 1，剩下的不是拐角）；异步时拐角计算每步约 0.09–0.13 s。原计划和改法：不照搬逐时间步的 local update（它要每个面每个时间步、和网格严格对齐的值，numpy 版每点 14 µs），改为拐角窗口里的**稳态 local update**：假设单个 primitive 的 BRT 已收敛（已验证 T = 2 收敛），从并集 U 出发迭代 `V ← min(ℓ, V + dt·H(V))`，只更新还在变的点，只用 V₀ 最后一层、任意角度；直接求解作为参考。向量化一阶步进和 `value_change_numpy` 逐位相同；
+- [X] **local update 接入在线流程（见 [13](13_online_local_update.md)）**：`SceneFilter(corners=True, corner_mode="sync" | "delayed" | "thread")`，默认 θ 30、只修障碍面之间的拐角；`hj` 的拐角碰撞在批量里基本消失（机器人半径 0.105 m：hj 场景 7 → 0，遮挡 4 → 1，剩下的不是拐角；半径改成 0.124 m 后 hj 场景 7 → 2，修正后的值只漏 5–12 mm，加 margin 会让遮挡场景变差，记成经典 `hj` 的局限，见 13.7）；异步时拐角计算每步约 0.09–0.13 s。原计划和改法：不照搬逐时间步的 local update（它要每个面每个时间步、和网格严格对齐的值，numpy 版每点 14 µs），改为拐角窗口里的**稳态 local update**：假设单个 primitive 的 BRT 已收敛（已验证 T = 2 收敛），从并集 U 出发迭代 `V ← min(ℓ, V + dt·H(V))`，只更新还在变的点，只用 V₀ 最后一层、任意角度；直接求解作为参考。向量化一阶步进和 `value_change_numpy` 逐位相同；
 - [ ] 对比实验：只用 transport vs transport + local update（介入率、超时、后路搜索开销），α 对 `hj` filter 的影响。
 
 **动力学和机器人**
 
-- [ ] Dubins4D（QBot）：profile、MPPI 的 4D step、4D 的后路（终端集合是"停下来"）、QBot 的 Gazebo 模型；
+- [X] Burger 的机器人半径改成真实值 0.124 m（位姿在轮轴中心，底盘后角离轴心 0.1237 m；原来 0.105），全部批量和 ROS 测试的预期重跑（2026-11-23）：`backup` / `hj_backup` 仍然 0 碰撞，地图通道够宽（hj 场景最窄 0.40 m），详见 [13](13_online_local_update.md) §13.7 最后一节；
+- [ ] Dubins4D（QBot，Quanser QBot Platform：六边形底盘 Ø570 mm，LiDAR 在轴心前 0.221 m；a、ω ∈ [−0.5, 0.5]，v ∈ [−0.2, 0.8] m/s，来自 hj_nav 论文）：离线 4D V₀（mars-14）→ profile、仿真、4D 的 pursuit / MPPI、`hj` 的 (a, ω)、后路改成"刹停" → 按 QBot 尺度的新地图 → 4D 拐角修正。进展（2026-11-23）：
+  - **速度上下限用动力学限幅**（HJ_local_update 的 `dubins_4d`：v 到界后不能再往外加速，v 轴正好是 [v_min, v_max]），不用 hj_nav 的"速度带进 avoid set、乘 λ = 10⁴"。`fast-brt/experiments/speed_limits_4d.py` 在墙和线段上比了三种做法（限幅、限幅且 v 轴加宽、λ 速度带），值彼此相差 < 1e-4，限幅最简单，V 一直是长度单位；
+  - 4D 的向量化一阶步进 `fast_brt.corner.Stepper4D` 和 `value_change_numpy`（`dubins_4d`）逐位相同；
+  - 同一实验发现一阶格式在粗网格上对少数状态偏乐观（主要在 v = v_max、冲过线段端点的逃法），主要随 x、y 的网格收敛（dx 减半：误判比例 0.10% → 0.03%），θ、v 加密作用不大；α 越大误差越大（α 5 / 10 / 20 / 40：误判 0.03 / 0.00 / 0.10 / 0.23%），α = 20 不是"不够"；4D V₀ 的网格和 α 据此再定；
 - [ ] 6D 无人机：确认模型（HJ_local_update 的 `quadrotor_6d` 是竖直平面四旋翼，不是水平面导航）、传感器、仿真器；
 - [ ] Dubins3D 的参数扫描（是否改用 `Dubins3D2Ctrl`）。
 
 **工程**
 
-- [ ] 在 mars-14 / 仿真机上实跑 ROS 节点（检查清单见 [06](06_simulation_and_ros.md)）；
+- [ ] 在 desktop（Ubuntu 22.04、Humble、Gazebo Classic 11）上实跑 ROS 节点（同事；上机指南和测试表见 [14](14_ros2_desktop_test.md)；节点已支持三种 filter、拐角修正的后台线程、扩展的日志；不用 ROS 的端到端测试已通过）；
 - [ ] 3D 点云 → 2D 扫描（`PointCloud2` 取高度带投影）；
 - [ ] 启动时检查 lidar 量程是否够 `unknown="occupied"` 启动；
 - [ ] 拐角列表 / 事件格式和 local update 的输入对齐；

@@ -3,7 +3,8 @@ import math
 import numpy as np
 import pytest
 
-from fastbrt_nav.conversions import odom_to_world, occupancy_data, scan_arrays, segments_points, yaw_from_quaternion
+from fastbrt_nav.conversions import (PoseHistory, odom_to_world, occupancy_data, scan_arrays, segments_points,
+                                    stamp_seconds, yaw_from_quaternion)
 
 
 def test_yaw_from_quaternion():
@@ -44,3 +45,21 @@ def test_occupancy_data_and_segments():
     st = np.array([[0, 1], [2, 1]])
     assert occupancy_data(st, unknown=0, free=1, occupied=2) == [-1, 0, 100, 0]
     assert segments_points([(np.array([0, 0]), np.array([1, 2]))]) == [(0.0, 0.0), (1.0, 2.0)]
+
+
+def test_stamp_seconds():
+    assert stamp_seconds(12, 500_000_000) == pytest.approx(12.5)
+
+
+def test_pose_history_interpolates_and_wraps():
+    h = PoseHistory(keep=1.0)
+    h.add(0.0, (0.0, 0.0, 3.0))
+    h.add(0.1, (0.01, 0.0, -3.0))                  # heading crossed +-pi
+    assert h.at(0.05) == pytest.approx([0.005, 0.0, 3.0 + (2 * math.pi - 6.0) / 2])
+    assert h.at(-1.0) == pytest.approx([0.0, 0.0, 3.0])        # before the history: the first pose
+    assert h.at(5.0) == pytest.approx([0.01, 0.0, -3.0])       # after: the last
+    for k in range(2, 30):
+        h.add(0.1 * k, (0.0, 0.0, 0.0))
+    assert h.times[-1] - h.times[0] <= 1.0 + 1e-9               # keeps about a second
+    h.add(0.0, (5.0, 5.0, 0.0))                                 # time went back: start over
+    assert len(h) == 1 and h.at(0.3) == pytest.approx([5.0, 5.0, 0.0])

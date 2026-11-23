@@ -96,11 +96,11 @@ PYTHONPATH=. python scripts/run_sim.py \
 **和 `run_episode` 跑的是同一套逻辑**，节点本身很薄：
 
 ```
-/scan, /odom → 累积地图 → nominal (pursuit | mppi) → backup filter → /cmd_vel
+/scan, /odom → 累积地图 → nominal (pursuit | mppi) → safety filter (backup | hj | hj_backup) → /cmd_vel
 ```
 
-- 每个 control period 用最新 pose 积分最新 scan，算出这一周期的 turn rate；
-- 用一个 sub-period timer 把 backup filter 返回的 4 个 zero-order-hold turn rate 依次发出去；
+- 每个 control period 把上个周期以来收到的每一帧 scan 积分一次，每帧都在**它自己时间戳那一刻的 LiDAR 位姿**上（`/odom` 历史插值 + profile 的 `sensor.offset`：Burger 的 LiDAR 在轮轴后方 3.2 cm），再用最新位姿算出这一周期的 turn rate；
+- 用一个 sub-period timer 把 filter 返回的 4 个 zero-order-hold turn rate 依次发出去：按"距离本周期开始过了几个子步"取，不靠出队，所以两个 timer 在周期边界谁先触发都不影响；控制回调晚了就保持最后一个；
 - 线速度恒为 profile 的 `v`；第一帧之前、到达 goal、filter 失败时发 0。
 
 只用到 `LaserScan` / `Odometry` / `Twist`，**Humble 和 Jazzy 完全一样**。
@@ -117,7 +117,7 @@ Gazebo 的 diff-drive odometry **以出生点为原点**。所以 launch 把 `x_
 | --- | --- | --- |
 | `cmd_vel` | `geometry_msgs/Twist` | 控制输出 |
 | `map` | `nav_msgs/OccupancyGrid` | 累积地图（−1 未知 / 0 自由 / 100 障碍） |
-| `fastbrt_markers` | `MarkerArray` | 障碍 face（蓝）、filter region（紫）、凸角（红）、凹角（橙） |
+| `fastbrt_markers` | `MarkerArray` | 障碍 face（蓝）、filter region（紫）、凸角（红）、凹角（橙）、拐角修正窗口（绿框） |
 | `obstacle_events` | `std_msgs/String` | 每条检测事件一个 JSON：稳定 ID、kind、face 和长度、corner |
 
 `obstacle_events` 就是给师妹 leaking-corner 模块的接口。
@@ -135,18 +135,20 @@ export TURTLEBOT3_MODEL=burger
 ros2 launch fastbrt_nav fastbrt_nav.launch.py
 ```
 
-launch 参数：`robot goal nominal filter unknown primitives map_origin map_size log_path`，以及透传给 Gazebo 的 `world x_pose y_pose yaw_pose`。
+launch 参数：`robot goal nominal filter unknown primitives v0 corners corner_mode margin map_origin map_size log_path`，以及透传给 Gazebo 的 `world x_pose y_pose yaw_pose`。`corners`：`auto`（`hj` 开、其他关）/ `true` / `false`；`corner_mode` 默认 `thread`（拐角窗口在后台线程算，不卡控制回调）。日志 CSV 每个周期一行：t、位姿、w_nom、w、decide_s、intervened、interventions、corner_windows、corner_solves、corner_seconds。
+
+不用 ROS 的端到端测试：`ros2/fastbrt_nav/test/test_node_without_ros.py` 用桩对象代替 rclpy，在仿真世界里把节点完整跑一遍（四种 filter）。上机步骤和测试表见 [14](14_ros2_desktop_test.md)。
 
 ### 上机前要确认的事
 
-节点**还没有在 Gazebo 里跑过**。第一次上机时请确认：
+节点**还没有在 Gazebo 里跑过**（上机指南见 [14](14_ros2_desktop_test.md)）。第一次上机时请确认：
 
 1. `/scan` 和 `/odom` 有数据：`ros2 topic hz /scan`；
-2. 发 `/cmd_vel` 机器人会动（bridge 里是 `Twist` 而不是 `TwistStamped`）；
+2. 发 `/cmd_vel` 机器人会动（`Twist`；Classic 由 `gazebo_ros_diff_drive` 直接订阅，新版 Gazebo 要 bridge 里也是 `Twist` 而不是 `TwistStamped`）；
 3. 决策时间小于 `ctrl_dt`（看 `log_path` 导出的 CSV 最后一列）；
-4. ROS distro 和 Gazebo 版本：`echo $ROS_DISTRO`、`gz sim --version`。
+4. ROS distro 和 Gazebo 版本：`echo $ROS_DISTRO`、`gazebo --version`（Classic）或 `gz sim --version`（新版）。
 
-第 4 条有个已知的不一致：repo 里 pin 的 `turtlebot3_simulations` 是 `main@9be186f`，它依赖 `gz_sim_vendor`（只有 Jazzy 有），而计划是用 Humble。Humble 的 apt `turtlebot3_gazebo` 配的是 Gazebo Classic。本节点两边都能跑，但 world 和 bridge 要对上。
+第 4 条：repo 里 pin 的 `turtlebot3_simulations` 是 `main@9be186f`（Jazzy、新版 Gazebo），desktop 是 **Ubuntu 22.04 + Humble**（Gazebo Classic 11）。现在两边都有 launch：`turtlebot3_controls/launch/hj_launch_world.launch.py`（新版 Gazebo + `ros_gz_bridge`）和 `hj_launch_world_classic.launch.py`（Classic + apt 的 `ros-humble-turtlebot3-gazebo`，world 开头的 `gz-sim-*` 插件在启动时去掉）；`fastbrt_nav.launch.py` 的 `gazebo` 参数选哪个，Humble 上默认 `classic`。两边的 Burger 模型 LiDAR 一样（轮轴后 3.2 cm，360 束，5 Hz）。代码已在 Humble 的 Python 组合（3.10、numpy 1.21.5、scipy 1.8.0）下跑过全部测试。
 
 ## 6.7 Legacy：旧的开环流程
 
