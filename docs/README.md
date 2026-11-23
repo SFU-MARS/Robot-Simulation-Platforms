@@ -19,6 +19,7 @@
 | [09 接入 fast-brt（讨论稿）](09_fast_brt_integration.md) | SFU-MARS/fast-brt 的现状、差距清单、复用方案、待讨论问题 |
 | [10 primitive 的放置、α 与精度](10_primitive_alpha_accuracy.md) | 内移放置、离线 `V₀` 精度复核（mars-14）、α 的选择、闭环对比 |
 | [11 路线图](11_roadmap.md) | **进度总表**：已定的决策、已完成、进行中、待办、待讨论的问题 |
+| [12 local update 的 BRT 版本](12_local_update_brt.md) | BRS 为什么不能避障、为什么不能事后补成 BRT、HJ_local_update 改了什么、验证结果 |
 
 只想快速上手：读 [01](01_overview.md) 和 [07](07_mppi_walkthrough.md) 就够。想知道现在做到哪了：读 [11 路线图](11_roadmap.md)。
 
@@ -33,7 +34,8 @@
 | **primitive** | FaST-BRT 的 facing-side primitive，一条障碍边对应一个，见 [05](05_safety_filter.md) |
 | **region** | 机器人可用的自由区域（outer ring + 孤立障碍的 inner rings） |
 | **face** | 障碍某一面的包裹直线，长度即该面的估计长度 |
-| **BRT** | Backward Reachable Tube，注定要撞的状态集合 |
+| **BRT** | Backward Reachable Tube，在 [0, T] 里**某个时刻**注定要撞的状态集合；避障用它 |
+| **BRS** | Backward Reachable Set，**恰好在时刻 T** 注定在障碍里的状态集合；不能用来避障，见 [12](12_local_update_brt.md) |
 
 ## 代码入口
 
