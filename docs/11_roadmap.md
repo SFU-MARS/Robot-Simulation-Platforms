@@ -125,7 +125,8 @@
 - [ ] Dubins4D（QBot，Quanser QBot Platform：六边形底盘 Ø570 mm，LiDAR 在轴心前 0.221 m；a、ω ∈ [−0.5, 0.5]，v ∈ [−0.2, 0.8] m/s，来自 hj_nav 论文）：离线 4D V₀（mars-14）→ profile、仿真、4D 的 pursuit / MPPI、`hj` 的 (a, ω)、后路改成"刹停" → 按 QBot 尺度的新地图 → 4D 拐角修正。进展（2026-11-23）：
   - **速度上下限用动力学限幅**（HJ_local_update 的 `dubins_4d`：v 到界后不能再往外加速，v 轴正好是 [v_min, v_max]），不用 hj_nav 的"速度带进 avoid set、乘 λ = 10⁴"。`fast-brt/experiments/speed_limits_4d.py` 在墙和线段上比了三种做法（限幅、限幅且 v 轴加宽、λ 速度带），值彼此相差 < 1e-4，限幅最简单，V 一直是长度单位；
   - 4D 的向量化一阶步进 `fast_brt.corner.Stepper4D` 和 `value_change_numpy`（`dubins_4d`）逐位相同；
-  - 同一实验发现一阶格式在粗网格上对少数状态偏乐观（主要在 v = v_max、冲过线段端点的逃法），主要随 x、y 的网格收敛（dx 减半：误判比例 0.10% → 0.03%），θ、v 加密作用不大；α 越大误差越大（α 5 / 10 / 20 / 40：误判 0.03 / 0.00 / 0.10 / 0.23%），α = 20 不是"不够"；4D V₀ 的网格和 α 据此再定；
+  - 同一实验发现一阶格式在粗网格上对少数状态偏乐观（主要在 v = v_max、冲过线段端点的逃法），主要随 x、y 的网格收敛（dx 减半：误判比例 0.10% → 0.03%），θ、v 加密作用不大；α 越大误差越大（α 5 / 10 / 20 / 40：误判 0.03 / 0.00 / 0.10 / 0.23%），差别不大，**4D 也用 α = 20**（用户决定）；
+  - **4D V₀ 的配置** `fast-brt/configs/v0_dubins_4d.json`：QBot 单位（时间 1/ω_max = 2 s，长度 v_max/ω_max = 1.6 m；ω_max = 1、v_max = 1、v_min = −0.125、a_max = 1.25），T = 1.6（numpy 实测：t = 1.6 时变化 < 1e-5，1.77 以后不再变；3D 是 2），网格 385 × 385 × 11 × 36，x、y ∈ [−4.8, 4.8]（3T，使 l_ref ≥ 2vT），dx = 0.025（4 cm），l_min = 0.224（36 cm），约 5900 万点、235 MB；另有 97 × 97 的 `v0_dubins_4d_coarse.json` 用来和 odp 对比、在本地开发。`export-v0 --solver numpy`（fast_brt.corner 的步进，low，小网格）不用 HeteroCL 也能导出；coarse 版本地 15 s：全速冲向墙在刹车距离（0.4 = 0.64 m）以内 V < 0，以外 V > 0，u* = 刹车 + 转向；
 - [ ] 6D 无人机：确认模型（HJ_local_update 的 `quadrotor_6d` 是竖直平面四旋翼，不是水平面导航）、传感器、仿真器；
 - [ ] Dubins3D 的参数扫描（是否改用 `Dubins3D2Ctrl`）。
 
