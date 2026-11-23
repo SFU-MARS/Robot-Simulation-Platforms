@@ -12,8 +12,16 @@ thickness only matters through
                 rectangle pokes out of the back;
   closedloop -- navigation with the backup filter for each alpha.
 
-Usage (from nav_core/, fast_brt of Hu-Hanyang/FaST-BRT on PYTHONPATH for now; the
-solves move to SFU-MARS/fast-brt once its point queries exist):
+Legacy: this is how docs/10 (sections 10.4-10.5) was produced, with the code before the
+backup filter port.  It needs Robot-Sim at daac2c4 (``FastBrtGatekeeper``) and
+Hu-Hanyang/FaST-BRT on PYTHONPATH (its numpy solver for V_0), e.g. in a worktree:
+
+    git worktree add /tmp/robot-sim-daac2c4 daac2c4 && cd /tmp/robot-sim-daac2c4/nav_core
+
+The ported filter (``nav_core.safety.BackupFilter``) reads an exported V0 instead
+(``python -m fast_brt export-v0 --alpha ...`` in fast-brt, one file per alpha).
+
+Usage (from nav_core/ of that checkout):
 
     PYTHONPATH=.:<FaST-BRT> python experiments/alpha_study.py resolution
     PYTHONPATH=.:<FaST-BRT> python experiments/alpha_study.py geometry

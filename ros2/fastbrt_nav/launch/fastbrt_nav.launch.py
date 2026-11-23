@@ -34,6 +34,7 @@ def nav_node(context):
         "filter": a("filter"),
         "unknown": a("unknown"),
         "primitives": a("primitives"),
+        "v0": a("v0"),
         "map_origin": floats(a("map_origin")),
         "map_size": floats(a("map_size")),
         "log_path": a("log_path"),
@@ -49,7 +50,7 @@ def generate_launch_description():
         ("world", os.path.join(controls_share, "worlds", "hj_reach_target.world")),
         ("x_pose", "-0.8"), ("y_pose", "-0.8"), ("yaw_pose", "0.2"),
         ("robot", "burger"), ("goal", "[0.7, 0.2]"),
-        ("nominal", "mppi"), ("filter", "gatekeeper"), ("unknown", "occupied"), ("primitives", "faces"),
+        ("nominal", "mppi"), ("filter", "backup"), ("unknown", "occupied"), ("primitives", "faces"), ("v0", ""),
         ("map_origin", "[0.0, 0.0]"), ("map_size", "[0.0, 0.0]"),       # [0, 0]: the profile's map
         ("log_path", ""), ("use_sim_time", "true"),
     ]

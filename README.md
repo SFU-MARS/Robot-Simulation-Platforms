@@ -2,7 +2,7 @@
 
 This repository follows the [Fast-BRT Experiment Document](https://docs.google.com/document/d/1S5lzXlQSW35xeCZrHe30NN7NRfxiYE0QOhNOWc51FYE/edit?tab=t.0). Most folders are git submodules. Clone them explicitly by adding `--recurse-submodules` to `git clone`, or run `git submodule update --init --recursive` after a checkout.
 
-**[`docs/`](docs/) walks through the code module by module (in Chinese), ending with one full MPPI control period from loading the map to the 2D primitives.** This README stays the quick reference: setup, usage, results and TODO.
+**[`docs/`](docs/) walks through the code module by module (in Chinese), ending with one full MPPI control period from loading the map to the 2D primitives.** Progress, decisions and next steps are in [`docs/11_roadmap.md`](docs/11_roadmap.md). Conventions for working with Claude Code are in [`CLAUDE.md`](CLAUDE.md). This README stays the quick reference: setup, usage, results and TODO.
 
 ## Goal
 
@@ -14,22 +14,26 @@ Each control period:
 /scan + /odom ──► mapping: accumulated occupancy grid ──► boundary edges (obstacle | frontier)
                                                                 │  edge length = obstacle side estimate
 /odom ──► nominal controller (obstacle-unaware) ──► u_nom       ▼
-                                                  HJ safety filter (FaST-BRT) ──► /cmd_vel
+                                                  safety filter (2D primitives, BRT) ──► /cmd_vel
 ```
 
 - **Nominal controller.** It drives towards the goal and carries no safety guarantee. Two are available: pure pursuit, which ignores the map, and MPPI on the accumulated map, which is optimistic about unknown space.
-- **Safety filter.** There is one HJ primitive per boundary edge, transported from a single precomputed value function. The filter overrides the nominal control only when needed. Unknown space is treated as occupied.
+- **Safety filter.** There is one 2D line primitive per obstacle face, transported from a single precomputed BRT value function. The filter overrides the nominal control only when needed. By default unknown space is treated as occupied.
+  - Where two primitives meet at a corner, their union can leak. An online local update ([HJ_local_update](https://github.com/SFU-MARS/HJ_local_update)) is planned to fix this.
+  - Three filter modes are planned: `hj` (classic HJ filter), `backup` (backup filter) and `hj_backup`. Only `backup` exists so far.
 - **Map.** It accumulates over the whole run. The environment is static, so the known free space only grows. In simulation the pose is known (odometry / ground truth), so no SLAM is needed.
 
 ### Division of work
 
-| | [FaST-BRT](https://github.com/Hu-Hanyang/FaST-BRT) (submodule, planned) | this repository |
+| | [fast-brt](https://github.com/SFU-MARS/fast-brt) (submodule `fast-brt/`, branch `robot-sim`) | this repository |
 | --- | --- | --- |
-| Scope | dynamics, HJ value functions, primitives, safety filter, leaking-corner updates ([HJ_local_update](https://github.com/SFU-MARS/HJ_local_update)) | navigation: robot profiles, mapping, nominal controllers, ROS 2 / Gazebo integration |
-| Depends on | numpy / scipy; `optimized_dp` offline only | FaST-BRT, ROS 2 |
+| Scope | dynamics, primitives, HJ value functions (offline solves), leaking-corner local update ([HJ_local_update](https://github.com/SFU-MARS/HJ_local_update), submodule `fast-brt/HJ_local_update/`, branch `robot-sim`) | navigation: robot profiles, mapping and obstacle detection, nominal controllers, safety filters, ROS 2 / Gazebo integration |
+| Depends on | numpy / scipy; `optimized_dp` + HeteroCL for solves | fast-brt, ROS 2 |
 
-- **Dependency direction.** Dependencies point one way: this repository imports FaST-BRT, never the reverse. No HJ code lives here.
-- **No online solves.** Values are precomputed offline with `optimized_dp` and loaded at start-up.
+- **Dependency direction.** Dependencies point one way: this repository → fast-brt → HJ_local_update. No HJ solver code lives here.
+- **Branches.** Both submodules track our own branch `robot-sim`. Never push to their `main`.
+- **Offline V0, online point query.** The backup filter reads one offline value function V₀ (`python -m fast_brt export-v0` in fast-brt, on the odp machine) with fast-brt's `fast_brt.query`, which is numpy only. The V₀ file is set per robot (`base_value` in `robots/<name>.yaml`, a path from the repository root). It is not in git: copy it to `fast-brt/results/v0/`. `nav_core.safety` imports `fast_brt.query` from `PYTHONPATH`, or else from the `fast-brt/` submodule. The old [Hu-Hanyang/FaST-BRT](https://github.com/Hu-Hanyang/FaST-BRT) is no longer used; don't put it on `PYTHONPATH` (its package has the same name).
+- **No online solves.** Primitive values are solved offline with `optimized_dp` and loaded at start-up. The local update recomputes only a small region online: HeteroCL in the `odp` environment, or the numpy implementation.
 - **odp utilities online.** Online code may import `odp`'s grid / index utilities, which do not need HeteroCL. It reaches them through `PYTHONPATH`.
 
 ### Robots
@@ -53,6 +57,10 @@ The map size and the LiDAR range are therefore chosen per robot.
 
 ```
 Robot-Simulation-Platforms/
+  CLAUDE.md                     # conventions for Claude Code (repo split, git rules, environment)
+  docs/                         # module-by-module docs (Chinese), roadmap in 11_roadmap.md
+  fast-brt/                     # submodule SFU-MARS/fast-brt (branch robot-sim): primitives, offline values, local update
+    HJ_local_update/            #   its submodule SFU-MARS/HJ_local_update (branch robot-sim)
   robots/                       # per-robot profiles: burger.yaml, qbot.yaml, crazyflie.yaml
   nav_core/                     # ROS-free navigation core (pip-installable project)
     pyproject.toml
@@ -61,20 +69,19 @@ Robot-Simulation-Platforms/
       mapping/                  #   occupancy grid, region, boundary edges, obstacle layer (faces, corners)
       nominal/                  #   nominal controllers: pursuit, map-aware MPPI
       sim/                      #   ROS-free closed loop: SDF world, synthetic LiDAR, unicycle plant
-      safety/                   #   FaST-BRT filters as safety hooks (unit conversion, map -> scene)
+      safety/                   #   safety filters as hooks (unit conversion, map -> scene, primitive placement)
     scripts/run_sim.py
+    experiments/                #   e.g. alpha_study.py (primitive placement and alpha, docs/10)
     tests/
   turtlebot3/
     turtlebot3_controls/        # ROS 2 package: worlds (hj_reach_target, worlds/occluded_4x4), launch, bridge params, legacy scripts
     turtlebot3_simulations/     # submodule (ROBOTIS), not modified
-  ros2/fastbrt_nav/             # ROS 2 node: /scan + /odom -> nav_core + FaST-BRT -> /cmd_vel, RViz map and markers
+  ros2/fastbrt_nav/             # ROS 2 node: /scan + /odom -> nav_core + safety filter -> /cmd_vel, RViz map and markers
   mujoco/unitree_mujoco/        # submodule (Unitree, MuJoCo)
   unitree_mujoco/               # submodule (same commit as above)
 ```
 
-Planned additions:
-- `FaST-BRT/`, as a submodule;
-- our own copy of the robot SDF models, so that the LiDAR range and rate can be set per profile without modifying `turtlebot3_simulations`.
+Planned addition: our own copy of the robot SDF models, so that the LiDAR range and rate can be set per profile without modifying `turtlebot3_simulations`.
 
 `nav_core` deliberately does not import `rclpy`. All robots and simulators share it, and it is tested without ROS.
 
@@ -104,7 +111,7 @@ safe_edges = boundary_edges(grid, footprint_radius=profile.footprint_radius)   #
 - **Accuracy.** In the test world, obstacle side lengths are recovered to within about one cell (2 cm). Marching squares chamfers convex corners, and these corners are snapped back by intersecting the adjacent sides.
 - **Corner clearance.** At convex corners the free region can exceed the true free space by less than one cell. The safety clearance should include at least one cell.
 
-**ROS-free closed loop.** `nav_core.sim` stands in for one Gazebo run. It reads the collision boxes of the same SDF world, keeping those that span the LiDAR plane. It ray-casts a synthetic scan that follows the `LaserScan` conventions and integrates a unicycle exactly. Every control period it runs scan → map → nominal → optional safety hook `safety(x, w_nom, grid) -> w`. The FaST-BRT filter plugs into this hook.
+**ROS-free closed loop.** `nav_core.sim` stands in for one Gazebo run. It reads the collision boxes of the same SDF world, keeping those that span the LiDAR plane. It ray-casts a synthetic scan that follows the `LaserScan` conventions and integrates a unicycle exactly. Every control period it runs scan → map → nominal → optional safety hook `safety(x, w_nom, grid) -> w`. The safety filter plugs into this hook.
 
 ```
 cd nav_core
@@ -114,19 +121,19 @@ PYTHONPATH=. python scripts/run_sim.py --noise 0.01      # 1 cm range noise
 
 With the nominal controller only, the Burger grazes the corner of obstacle 2 and collides at t ≈ 7.3 s. This is the case the safety filter has to handle. Figures are written to `nav_core/outputs/`.
 
-**FaST-BRT witness gatekeeper (prototype).** `nav_core.safety.FastBrtGatekeeper` plugs FaST-BRT's gatekeeper into the safety hook. Each period it does three things:
+**Backup filter (formerly "witness gatekeeper").** `nav_core.safety.BackupFilter` is the safety hook (`--filter backup`); the witness search is in `nav_core.safety.witness`. Each period it does three things:
 1. It takes the region the robot may use from the accumulated map, shrunk by the footprint (`free_region`). The region is an outer boundary plus one closed ring around every obstacle inside it.
-2. It puts one primitive on every ring edge.
-3. It accepts the nominal turn rate only if a witness exists from the next state: a rollout that keeps the clearance and ends on a free loiter circle.
+2. It puts one primitive on every obstacle face (plus the frontier edges with `unknown=occupied`), placed inward, with its value from V₀ (`fast_brt.query`).
+3. It accepts the nominal turn rate only if a witness exists from the next state: a rollout that keeps the clearance and ends on a free loiter circle. The first candidate of the search is the HJ control of the nearest primitive.
 
 Two modes (`unknown=`), to be compared:
 - `occupied` (default): unknown space is an obstacle. The region is the known free space, so frontier edges are obstacles too. This mode is safe even against obstacles hidden behind others.
 - `free`: only detected obstacles count. The region is everything but the detected obstacles. It is less conservative, but it is safe only if every obstacle is seen before the robot enters its BRT.
 
-In both modes the modelled obstacle is the complement of the region. Every detected obstacle cell, grown by the footprint, is therefore covered completely, not just outlined by thin primitives. A free-standing obstacle (a pillar, a rock) is enclosed by its own ring. This holds even when only one face has been seen. `RegionScene` generalizes FaST-BRT's `SceneModel` (one simple polygon) to these regions. It belongs upstream in FaST-BRT. Until FaST-BRT is a submodule, `fast_brt` is imported from `PYTHONPATH`:
+In both modes the modelled obstacle is the complement of the region. Every detected obstacle cell, grown by the footprint, is therefore covered completely, not just outlined by thin primitives. A free-standing obstacle (a pillar, a rock) is enclosed by its own ring. This holds even when only one face has been seen (`nav_core.safety.Scene`).
 
 ```
-PYTHONPATH=.:<path to FaST-BRT> python scripts/run_sim.py --filter gatekeeper [--unknown free]
+PYTHONPATH=. python scripts/run_sim.py --filter backup [--unknown free]
 ```
 
 Burger, default start and goal: the run reaches the goal at t ≈ 17.6 s, with 7 interventions in 88 periods and a 5.5 cm minimum clearance. Batches of random starts × goals gave these results (no collision with either filter mode):
@@ -141,9 +148,12 @@ Burger, default start and goal: the run reaches the goal at t ≈ 17.6 s, with 7
 | | unknown free | 35 | 0 | 0 |
 
 - **Modes look alike here.** The two modes barely differ because the 2 m arena with a 0.8 m LiDAR range has little occlusion. A larger, more occluded world is needed to compare them.
-- **Timeouts.** Pure pursuit ignores obstacles, so the gatekeeper keeps rejecting it and the robot loiters on its certified circle. This is a liveness problem of the nominal controller, not of the filter.
+- **Timeouts.** Pure pursuit ignores obstacles, so the backup filter keeps rejecting it and the robot loiters on its certified circle. This is a liveness problem of the nominal controller, not of the filter.
 - **Geometry.** The 2 m arena is tight for a certified loiter circle. What matters is the turning radius v / ω_max. At 0.2 m there is no witness at the start, so the Burger profile uses 0.1 m (v = 0.1 m/s, ω_max = 1 rad/s). This is also within the differential-drive limit v + ω_max · track / 2 ≤ wheel speed, which `load_profile` checks. The Burger's 0.22 m/s and 2.84 rad/s maxima cannot be reached at the same time.
-- **Edge cutting.** Edges are cut so that no primitive reaches more than one cell off its edge (`h_max`).
+- **Primitive placement.** The results above use the current code default `placement="centered"`: the face is the rectangle's midline. Long faces are cut (`cut=True`) so that no primitive reaches more than one cell off its face (`h_max`).
+  - The intended design is `placement="inward", cut=False`: the rectangle's free-facing side lies on the face. Then the BRT depends only on the face length L, and no cutting is needed (Design decision 3).
+  - The inward placement also has no collisions, with fewer interventions and 60–75 % fewer primitives ([docs/10](docs/10_primitive_alpha_accuracy.md)).
+  - The default switches once the offline BRT value `V₀` is loaded from fast-brt ([roadmap](docs/11_roadmap.md) step 5).
 
 **Nominal controllers.**
 - `pursuit` always turns the robot's heading towards the goal, at a turn rate proportional to the heading error (capped at ω_max). It ignores the map, so it drives straight into obstacles.
@@ -153,16 +163,16 @@ Burger, default start and goal: the run reaches the goal at t ≈ 17.6 s, with 7
 
   It is optimistic: unknown space counts as drivable.
 
-Batches of random starts × goals, with no filter and with the gatekeeper:
+Batches of random starts × goals, with no filter and with the backup filter:
 
-| world | nominal | nominal only | + gatekeeper |
+| world | nominal | nominal only | + backup filter |
 | --- | --- | --- | --- |
 | `hj_reach_target` (26 runs) | pursuit | 10 reached, 16 collisions | 13 reached, 0 collisions, 13 timeouts |
 | | mppi | 19 reached, 7 collisions | 13 reached, 0 collisions, 13 timeouts |
 | walls + pillar (35 runs) | pursuit | 22 reached, 13 collisions | 35 reached |
 | | mppi | 34 reached, 1 collision | 35 reached, filter never had to intervene |
 
-**Why the 13 timeouts in `hj_reach_target` do not go away with MPPI.** The robot model cannot stop: it always drives at constant speed and can only steer. The only way to "wait safely" is to drive in a tight circle (radius 0.1 m). The gatekeeper therefore accepts a command only if, afterwards, the robot still has a way to reach known free space wide enough to circle in. That takes about 0.45 m: the circle's 0.2 m diameter, plus the robot's width (2 × 0.105 m), plus a margin. The upper-left area of this world is reachable only through a 0.4 m gap between obstacle 1 and the north wall. The robot itself would fit, but it could not circle inside the gap, so the gatekeeper never lets it in. Exactly 13 of the 26 runs need that gap. This is a limit of the constant-speed model, not of the nominal controller. A robot that can brake (Dubins 4D, QBot) can "wait safely" by stopping and does not have it.
+**Why the 13 timeouts in `hj_reach_target` do not go away with MPPI.** The robot model cannot stop: it always drives at constant speed and can only steer. The only way to "wait safely" is to drive in a tight circle (radius 0.1 m). The backup filter therefore accepts a command only if, afterwards, the robot still has a way to reach known free space wide enough to circle in. That takes about 0.45 m: the circle's 0.2 m diameter, plus the robot's width (2 × 0.105 m), plus a margin. The upper-left area of this world is reachable only through a 0.4 m gap between obstacle 1 and the north wall. The robot itself would fit, but it could not circle inside the gap, so the backup filter never lets it in. Exactly 13 of the 26 runs need that gap. This is a limit of the constant-speed model, not of the nominal controller. A robot that can brake (Dubins 4D, QBot) can "wait safely" by stopping and does not have it.
 
 **Occluded world and the two filter modes.** `worlds/occluded_4x4.world` is a 4 × 4 m arena with:
 - three screens, each with a box hidden right behind one of its ends;
@@ -191,7 +201,7 @@ Results:
 - *Enclosure.* Every face lies at least 0.95 cm outside the true obstacles. With `offset` = the footprint radius, the faces describe the configuration-space obstacle.
 - *Noise.* With 1 cm range noise and 10 scans per place, there are 13 faces and 5 convex corners. Here a face can cut up to 0.6 cm into the true obstacle, because the map itself is noisy; the safety clearance (1.5 cells) covers this.
 
-Gatekeeper comparison, primitives from faces vs from the region's rings: there are no collisions with either. Reached and timeout counts are identical. The minimum clearance grows from 3.4 to 5.5 cm (`hj_reach_target`) and from 2.5 to 4.8 cm (pillar world). This is because the faces enclose the obstacles with square corners. The cost stays at about 15–30 ms per step.
+Backup filter comparison, primitives from faces vs from the region's rings: there are no collisions with either. Reached and timeout counts are identical. The minimum clearance grows from 3.4 to 5.5 cm (`hj_reach_target`) and from 2.5 to 4.8 cm (pillar world). This is because the faces enclose the obstacles with square corners. The cost stays at about 15–30 ms per step.
 
 **Obstacle tracking and detection events.** `extract_obstacles` relabels the map from scratch every period, so its obstacle ids are not stable. `ObstacleTracker.update(obstacle_map, t)` fixes that:
 - *Matching.* It matches each obstacle to the previous period's by shared occupied cells. Occupied cells persist: an obstacle grows as more of it is seen.
@@ -207,7 +217,7 @@ Gatekeeper comparison, primitives from faces vs from the region's rings: there a
 
 Where it is used:
 - `run_episode(..., tracker=ObstacleTracker())` collects the events, and `run_sim.py --events` prints them. In the occluded world, for example, screen_1 grows from 0.91 m to its true 1.40 m as the robot drives along it. The hidden box is detected at t ≈ 8.6 s and ends at faces of about 0.22 × 0.20 m (true 0.2 × 0.2 m).
-- `FastBrtGatekeeper` gives its faces stable ids and keeps the period's events in `gate.events`.
+- `BackupFilter` gives its faces stable ids and keeps the period's events in `gate.events`.
 - The ROS 2 node publishes every event as JSON on `obstacle_events`.
 
 **Map update model.** Each cell counts how often a ray *ended* in it (hit) and how often a ray *passed through* it (pass):
@@ -240,19 +250,19 @@ Switching the default did not change any batch result above except the occluded 
 - `+inf`, or a reading ≥ range max, means no return: the ray is free up to the range.
 - `nan`, `-inf` and readings below `range_min` are invalid and are skipped. They never clear cells.
 
-**Units.** FaST-BRT's Dubins 3D model is nondimensional (v = 1, |ω| ≤ 1). For the Burger profile (v = 0.1 m/s, ω_max = 1 rad/s), one model length unit is 0.1 m and one model time unit is 1 s (`profile.units`).
+**Units.** The HJ Dubins 3D model is nondimensional (v = 1, |ω| ≤ 1, turning radius 1). For the Burger profile (v = 0.1 m/s, ω_max = 1 rad/s), one model length unit is 0.1 m and one model time unit is 1 s (`profile.units`).
 
 ## ROS 2 node: fastbrt_nav
 
 `ros2/fastbrt_nav` runs the same loop as `nav_core.sim` against Gazebo (or a real robot):
 
 ```
-/scan, /odom → accumulated map → nominal (pursuit | mppi) → FaST-BRT gatekeeper → /cmd_vel
+/scan, /odom → accumulated map → nominal (pursuit | mppi) → backup filter → /cmd_vel
 ```
 
 Behaviour:
 - It integrates the newest scan at the newest pose, once per control period (the profile's `ctrl_dt`).
-- It publishes the gatekeeper's zero-order-hold turn rates on a sub-period timer.
+- It publishes the backup filter's zero-order-hold turn rates on a sub-period timer.
 - It drives at the profile's constant speed. It stops (zero `cmd_vel`) before the first scan, at the goal, and if the filter cannot certify the start or fails.
 - It uses only `LaserScan`, `Odometry` and `Twist`, so the same code runs on Humble and Jazzy.
 
@@ -261,7 +271,7 @@ It has not run in Gazebo yet. Only the message conversions (`fastbrt_nav/convers
 Build and run (from `turtlebot3/`, next to `turtlebot3_controls`):
 
 ```
-export PYTHONPATH=<repo>/nav_core:<path to FaST-BRT>:$PYTHONPATH     # nav_core and fast_brt are not ROS packages
+export PYTHONPATH=<repo>/nav_core:<repo>/fast-brt:$PYTHONPATH     # nav_core and fast_brt are not ROS packages
 colcon build --base-paths . ../ros2 --packages-select turtlebot3_controls fastbrt_nav
 source install/setup.bash
 export TURTLEBOT3_MODEL=burger
@@ -273,7 +283,7 @@ ros2 launch fastbrt_nav fastbrt_nav.launch.py \
 
 Launch arguments:
 - `robot` (profile, default `burger`), `goal`;
-- `nominal` (`mppi` | `pursuit`), `filter` (`gatekeeper` | `none`), `unknown` (`occupied` | `free`), `primitives` (`faces` | `rings`);
+- `nominal` (`mppi` | `pursuit`), `filter` (`backup` | `none`), `unknown` (`occupied` | `free`), `primitives` (`faces` | `rings`), `v0` (V₀ file; default the profile's `base_value`);
 - `map_origin` / `map_size` (default: the profile's map);
 - `log_path` (CSV of t, pose, w_nom, w and decision time per period).
 
@@ -363,7 +373,7 @@ pkill -f ros
 
 ## Design decisions
 
-Decisions taken so far, with their reasons, so that they are not revisited by accident. Date: 2026-11-15.
+Decisions taken so far, with their reasons, so that they are not revisited by accident. Decisions 1–5 date from 2026-11-15; decision 3 was revised and decisions 6–9 were added on 2026-11-21. The full list is in [docs/11 §11.2](docs/11_roadmap.md).
 
 **1. Two layers: region for safety, obstacles for primitives (hybrid).** Both layers are computed from the accumulated occupancy grid in every control period.
 - *Safety layer (region).* The region is the part of the map the robot may use, shrunk by the footprint: an outer boundary plus one closed ring around every obstacle inside it. The complement of the region is the modelled obstacle. Witnesses are verified against its signed distance. This layer guarantees that every detected cell is covered and handles frontiers and occlusion.
@@ -378,18 +388,38 @@ Decisions taken so far, with their reasons, so that they are not revisited by ac
 
 **2. Obstacles that touch are one obstacle.** A connected component of occupied cells is one obstacle, even when it is physically several objects. For example, in `hj_reach_target.world` obstacle 1, obstacle 2 and the west wall touch, so they form a single obstacle. The faces and corners are still correct; only the IDs merge. Splitting such a component (e.g. at concave corners) is possible later if needed.
 
-**3. Long faces are cut into several collinear primitives.** A primitive of length L is an L × L/√α rectangle, so one primitive per long wall would reach far into the free space. A face keeps one ID and one length estimate. The cut points are collinear, so they are not corners.
+**3. Inward placement, one primitive per face (revised 2026-11-21).** A primitive of length L is an L × L/√α rectangle.
+- *New rule.* The rectangle's free-facing side lies on the face, so all of its thickness is inside the obstacle. The BRT on the free side then depends only on L, and long faces need no cutting.
+- *Faces shorter than L_min.* They are extended symmetrically to `L_min ≈ 2·dx·√α` (about 0.45 turning radii for a 241 grid and α = 20). This is conservative.
+- *The old rule was a deployment deviation.* The face was the rectangle's midline, and long faces were cut into collinear pieces so that a long wall's primitive would not reach far into free space.
+- *Code.* It is `placement="inward", cut=False`. The default still uses the old rule until the offline `V₀` is loaded.
 
-**4. Corner list for the leaking-corner update.** The obstacle layer outputs where two faces of an obstacle meet at an angle. This list is the input for the leaking-corner value update (HJ_local_update, in FaST-BRT). The exact format is to be agreed with the HJ_local_update side.
+**4. Corner list for the leaking-corner update.** The obstacle layer outputs where two faces of an obstacle meet at an angle. This list is the input for the leaking-corner local update (HJ_local_update, under fast-brt). The exact format is to be agreed with the HJ_local_update side.
 
 **5. Two filter modes are kept for comparison.**
 - `unknown=occupied` treats unknown space as an obstacle. It is safe against occlusion surprises.
 - `unknown=free` counts only detected obstacles.
 
+**6. Primitives use the BRT, not the BRS.** The BRS (`TargetSetMode "None"`) has height 0 in front of a face: a state heading straight into the face is judged safe. Avoidance needs the BRT (`minVWithV0`). The local update has a BRT option too (`brt=True` in HJ_local_update, `target_set_mode="brt"` in fast-brt).
+
+**7. Offline value: linear encoding, first order, 241 grid, α = 20.**
+- *Encoding.* The value is `max(|x|, √α|y|) − L/2`, odp `accuracy="low"`, solved on a 241 grid (`v0_dubins_3d_linear_alpha20_low.npz`).
+- *Why first order.* The local update recomputes first-order steps, so every primitive that goes into it must be solved with `accuracy="low"`; using one V₀ everywhere keeps it simple.
+- *Accuracy.* The old setup was a quadratic encoding, first order, 121 grid. It underestimates the BRT in front of a face by about 0.22 turning radii on average. The new setup is off by about 0.09; `accuracy="medium"` would give about 0.04 but cannot be used with the local update ([docs/10](docs/10_primitive_alpha_accuracy.md)).
+- *Options.* Linear / quadratic × low / medium V₀ are all kept, to compare them (`experiments/filter_batch.py --v0 ...`).
+
+**8. Three filter modes are kept as options.**
+- `hj`: the classic HJ filter on the primitive values.
+- `backup`: the backup filter. It accepts the nominal control only if a safe backup maneuver exists afterwards.
+- `hj_backup`: both combined.
+
+**9. Dynamics order.** Constant-speed Dubins 3D comes first; its parameters will be swept later. Dubins 4D (QBot) follows, and a 6D drone after that.
+
 ## TODO
 
 **Integration**
-- [ ] Add FaST-BRT as a submodule pinned to a commit, after the leaking-corner work is pushed, and agree on one integration branch.
+- [x] Add fast-brt as a submodule (`fast-brt/`, branch `robot-sim`), with HJ_local_update as its submodule (branch `robot-sim`); a recursive clone fetches all three levels
+- [ ] Pin the `optimized_dp` version fast-brt needs: the old `Grid(min, max, dims, pts, pDim)` signature, from before odp commit 689548e
 - [ ] Confirm the ROS 2 distro and Gazebo version on the simulation machine (`echo $ROS_DISTRO`, `lsb_release -rs`, `gz sim --version`); see Open questions.
 - [ ] Register `optimized_dp` as a submodule. It is listed in `.gitmodules` but is not a gitlink in the tree, so a recursive clone does not fetch it.
 - [ ] Decide whether both `unitree_mujoco/` and `mujoco/unitree_mujoco/` are needed (they pin the same commit).
@@ -399,11 +429,15 @@ Decisions taken so far, with their reasons, so that they are not revisited by ac
 - [x] Accumulated occupancy grid and boundary edges with obstacle side-length estimates (`nav_core.mapping`)
 - [x] Pure-pursuit nominal controller for Dubins 3D (`nav_core.nominal`)
 - [x] ROS-free closed-loop simulator on the Gazebo SDF world (`nav_core.sim`, `scripts/run_sim.py`)
-- [x] FaST-BRT witness gatekeeper as a `nav_core.sim` safety hook (prototype: `fast_brt` from `PYTHONPATH`, Dubins 3D), with free-standing obstacles and two modes (unknown occupied / free)
+- [x] Backup filter (formerly witness gatekeeper) as a `nav_core.sim` safety hook (Dubins 3D), with free-standing obstacles and two modes (unknown occupied / free)
+- [x] Inward primitive placement option (`placement="inward"`) and the α study (`experiments/alpha_study.py`, [docs/10](docs/10_primitive_alpha_accuracy.md))
+- [x] Backup filter ported into `nav_core/safety` as `BackupFilter`, using fast-brt's point query and the offline V₀; defaults inward placement, no cutting ([roadmap](docs/11_roadmap.md) step 4)
+- [ ] Rerun the batches with the new V₀ and update the docs (step 5)
+- [ ] Filter modes `hj` and `hj_backup`
 - [x] Occluded test world (`worlds/occluded_4x4.world`) and LiDAR-range sweep of the two modes
 - [ ] Start-up check that the LiDAR range lets `unknown=occupied` start (≈ robot radius + 2 × turning radius + margin)
 - [x] Obstacle layer (Design decisions 1–4, `nav_core.mapping.extract_obstacles`): connected components → enclosing faces (shallow turns merged) → lengths, IDs, corners (convex / concave)
-- [x] Gatekeeper primitives from the obstacle layer (`primitives="faces"`, default) + frontier edges; margin still from the region
+- [x] Backup filter primitives from the obstacle layer (`primitives="faces"`, default) + frontier edges; margin still from the region
 - [ ] Derive the face-fit tolerance from the sensor noise (profile field). Defaults to 1.5 cells, which suits ~1 cm noise with several scans per place; 2 cm noise needs about 2 cells
 - [x] Stable obstacle ids and detection events (`ObstacleTracker`; `obstacle_events` topic in the ROS node)
 - [ ] Agree on the corner-list / event format with the HJ_local_update side
@@ -416,16 +450,22 @@ Decisions taken so far, with their reasons, so that they are not revisited by ac
   - publish RViz markers (grid, edges) and log trajectories.
 - [ ] Closed-loop Burger in Gazebo with the nominal controller only (no filter), to check units, speed limits and timing
 - [ ] Our own copy of the Burger SDF, with the LiDAR rate and range taken from the profile
-- [ ] Generic MPPI nominal controller on FaST-BRT dynamics (3D first, then 4D / 6D)
+- [ ] Generic MPPI nominal controller on fast-brt dynamics (3D first, then 4D / 6D)
 - [ ] QBot: Gazebo model and profile values
 - [ ] Crazyflie: 6D model, simulator, sensor and profile values
 
-**Safety (FaST-BRT)**
+**Safety (fast-brt, branch `robot-sim`)**
+- [x] Import `fast_brt` without HeteroCL (lazy import of HJ_local_update)
+- [x] Offline accuracy study (`experiments/primitive_accuracy.py`, run on mars-14)
+- [x] BRT option for the local update (`target_set_mode="brt"`; HJ_local_update `brt=True`, numpy and HeteroCL). The numpy version matches a direct BRT solve on an L shape in sign.
+- [x] numpy local update option (`local_update_impl="numpy"`)
+- [ ] Check the HeteroCL BRT local update and its timing on mars-14 (`pytest -m slow -k tube`, `experiments/local_update_timing.py`)
+- [ ] Export the offline `V₀` (BRT, chosen accuracy, final slice + grid parameters) from a CLI (roadmap step 1), then run it on mars-14 (step 3)
+- [ ] numpy point query without odp: length shift, inward placement, short-face extension, `V`, `∂V/∂θ`, `u*` (step 2)
+- [ ] Second-order local update (the kernel is first order now), or a hybrid correction
+- [ ] Online local update: a window that moves with the robot; incremental updates per obstacle id
 - [ ] Dubins 4D and 6D dynamics and their offline values
-- [ ] Leaking-corner value updates (HJ_local_update) inside FaST-BRT
-- [ ] A safety-filter interface that takes the nominal control as input, e.g. `SafetyFilter.step(x, u_nom, scene)`
-- [ ] Move `RegionScene` (`nav_core/safety/fastbrt_gatekeeper.py`) into FaST-BRT. It generalizes `SceneModel` from one simple polygon to an outer boundary plus closed rings around obstacles, which accumulated maps with free-standing obstacles need.
-- [ ] Save / load of the precomputed values together with their grid parameters
+- [ ] A safety-filter interface that takes the nominal control as input, e.g. `SafetyFilter.step(x, u_nom, scene)` (in `nav_core/safety`)
 
 ## Open questions
 
@@ -434,5 +474,5 @@ Decisions taken so far, with their reasons, so that they are not revisited by ac
   - Humble's apt `turtlebot3_gazebo` targets Gazebo Classic.
 
   Which distro and which Gazebo does the simulation machine actually run? New code targets Python 3.10, so it runs on both.
-- **HJ_local_update.** Does it run online, and if so, does it need HeteroCL? Online code runs in the ROS 2 Python, not in the `odp` conda environment.
+- **HJ_local_update online.** The HeteroCL kernel needs the `odp` conda environment, but online code runs in the ROS 2 Python. A numpy implementation exists. Is it fast enough, or should the update run as a separate service, triggered by detection events?
 - **Crazyflie sensor and simulator.** Which simulator? Which sensor: an ideal LiDAR, or the 5-beam Multi-ranger deck?

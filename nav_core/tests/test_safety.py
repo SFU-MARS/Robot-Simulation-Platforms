@@ -43,27 +43,47 @@ def test_free_region_returns_free_standing_obstacles():
     assert np.abs(h).max() == pytest.approx(0.1 + 0.05, abs=0.03)          # box grown by the footprint
 
 
-def test_gatekeeper_avoids_the_collision():
-    pytest.importorskip("fast_brt")
-    from nav_core.safety import FastBrtGatekeeper
+def test_backup_filter_avoids_the_collision(v0):
+    from nav_core.safety import BackupFilter
     p = load_profile("burger")
     w = World.from_sdf(WORLD, plane_z=p.sensor.height)
-    gate = FastBrtGatekeeper(p)
+    gate = BackupFilter(p, v0)
     ep = run_episode(p, w, (-0.8, -0.8, 0.2), (0.7, 0.2), make_nominal(p), safety=gate, t_max=30.0)
     assert ep.status == "reached"                              # nominal alone collides (test_sim)
     assert gate.interventions > 0
     assert w.distance(ep.traj[:, :2]).min() > p.footprint_radius
 
 
+def test_backup_filter_loads_the_profile_v0(v0):
+    from nav_core.safety import BackupFilter
+    gate = BackupFilter(load_profile("burger"))                # robots/burger.yaml base_value
+    assert gate.v0.encoding == "linear" and gate.alpha == 20.0 and gate.v0.meta["target_set_mode"] == "brt"
+    assert gate.v0.meta["accuracy"] == "low"                   # the scheme of the local update
+
+
+def test_backup_filter_rejects_a_missing_or_wrong_v0(tmp_path, fake_v0):
+    import dataclasses
+    from fast_brt.query import PrimitiveV0
+    from nav_core.safety import BackupFilter
+    p = load_profile("burger")
+    with pytest.raises(FileNotFoundError, match="export-v0"):
+        BackupFilter(p, tmp_path / "missing.npz")
+    with pytest.raises(ValueError, match="base_value"):
+        BackupFilter(dataclasses.replace(p, base_value=None))
+    reach = PrimitiveV0(fake_v0.data, [-6.0, -6.0, -np.pi], [6.0, 6.0, np.pi], [241, 241, 60], [2], 20.0, "linear",
+                        2.0, "dubins_3d", {"v": 1, "wMax": 1, "uMode": "min"})
+    with pytest.raises(ValueError, match="avoid"):
+        BackupFilter(p, reach)
+
+
 @pytest.mark.parametrize("unknown", ["occupied", "free"])
-def test_scene_covers_a_free_standing_obstacle(unknown):
+def test_scene_covers_a_free_standing_obstacle(unknown, fake_v0):
     """Every robot position whose footprint touches the detected pillar is
     rejected: its margin is at most the clearance, and the filter only accepts
     margin > clearance."""
-    pytest.importorskip("fast_brt")
-    from nav_core.safety import FastBrtGatekeeper
+    from nav_core.safety import BackupFilter
     p, g = scanned(PILLAR, AROUND)
-    gate = FastBrtGatekeeper(p, unknown=unknown)
+    gate = BackupFilter(p, fake_v0, unknown=unknown)
     scene = gate.scene(np.array([0.5, 0.5, 0.0]), g)
     xs = np.linspace(-0.1 - p.footprint_radius, 0.1 + p.footprint_radius, 41)
     pts = np.stack(np.meshgrid(xs, xs), -1).reshape(-1, 2)
@@ -74,39 +94,51 @@ def test_scene_covers_a_free_standing_obstacle(unknown):
 
 
 @pytest.mark.parametrize("unknown", ["occupied", "free"])
-def test_gatekeeper_around_a_pillar(unknown):
-    pytest.importorskip("fast_brt")
-    from nav_core.safety import FastBrtGatekeeper
+def test_backup_filter_around_a_pillar(unknown, v0):
+    from nav_core.safety import BackupFilter
     p = load_profile("burger")
-    gate = FastBrtGatekeeper(p, unknown=unknown)
+    gate = BackupFilter(p, v0, unknown=unknown)
     ep = run_episode(p, PILLAR, (-0.6, -0.6, 0.0), (0.6, 0.6), make_nominal(p), safety=gate, t_max=60.0)
     assert ep.status in ("reached", "timeout"), ep.error
     assert PILLAR.distance(ep.traj[:, :2]).min() > p.footprint_radius
 
 
-def test_primitive_frames_inward_puts_the_free_side_on_the_face():
-    from nav_core.safety.fastbrt_gatekeeper import primitive_frames
+def test_place_faces_inward_and_centered(fake_v0):
+    from nav_core.safety import place_faces
     a, b, n = np.array([0.0, 0.0]), np.array([4.0, 0.0]), np.array([0.0, 1.0])   # face on y = 0, free above
-    (c, hl, hw, beta), = primitive_frames([(a, b, n)], alpha=20.0, placement="inward")
+    (c, hl, hw, beta), = place_faces(fake_v0, [(a, b, n)], "inward").rectangles()
     assert hl == pytest.approx(2.0) and hw == pytest.approx(2.0 / np.sqrt(20.0)) and beta == pytest.approx(0.0)
     assert c == pytest.approx([2.0, -hw])                       # rectangle y in [-2 hw, 0]: thickness behind the face
-    (c2, _, hw2, _), = primitive_frames([(a, b, n)], alpha=20.0, placement="centered")
+    (c2, _, hw2, _), = place_faces(fake_v0, [(a, b, n)], "centered").rectangles()
     assert c2 == pytest.approx([2.0, 0.0]) and hw2 == pytest.approx(hw)    # the face as midline
-    pieces = primitive_frames([(a, b, n)], alpha=20.0, placement="inward", max_side_len=1.0)
+    pieces = place_faces(fake_v0, [(a, b, n)], "inward", max_side_len=1.0).rectangles()
     assert len(pieces) == 4 and all(p[1] == pytest.approx(0.5) for p in pieces)
+    assert len(place_faces(fake_v0, [], "inward")) == 0
     with pytest.raises(ValueError):
-        primitive_frames([(a, b, n)], alpha=20.0, placement="sideways")
+        place_faces(fake_v0, [(a, b, n)], "sideways")
 
 
-def test_inward_rectangles_stay_behind_the_faces():
+def test_scene_value_and_hj_control(fake_v0):
+    from nav_core.safety import Scene, place_faces
+    faces = place_faces(fake_v0, [(np.array([-1.0, 0.0]), np.array([1.0, 0.0]), np.array([0.0, 1.0]))])
+    scene = Scene(fake_v0, faces, None, clearance=0.3, horizon=2.0)
+    states = np.array([[0.0, 0.5, 0.0], [0.0, -2.0, 1.0]])
+    assert scene.value(states) == pytest.approx(fake_v0.value(states, faces))
+    assert scene.margin(states[:, :2]) == pytest.approx([0.5, 2.0 - 2 * faces.half_wid[0]])
+    assert np.all(np.abs(scene.hj_control(states)) == 1.0)
+    empty = Scene(fake_v0, place_faces(fake_v0, []), None, clearance=0.3, horizon=2.0)
+    assert np.all(np.isinf(empty.value(states))) and np.all(empty.hj_control(states) == 0.0)
+    assert np.all(np.isinf(empty.margin(states)))
+
+
+def test_inward_rectangles_stay_behind_the_faces(fake_v0):
     """Inward placement on a scanned map: every rectangle's back edge is on the obstacle
     side of the region boundary, and its front edge reaches at most two cells into the
     free region (faces are enclosing, so they sit slightly outside the region contour)."""
-    pytest.importorskip("fast_brt")
-    from nav_core.safety import FastBrtGatekeeper
-    from nav_core.safety.fastbrt_gatekeeper import _contains
+    from nav_core.safety import BackupFilter
+    from nav_core.safety.backup_filter import _contains
     p, g = scanned(PILLAR, AROUND)
-    gate = FastBrtGatekeeper(p, placement="inward", cut=False)
+    gate = BackupFilter(p, fake_v0)
     scene = gate.scene(np.array([0.5, 0.5, 0.0]), g)
     cell = p.map.resolution / p.units.length
 

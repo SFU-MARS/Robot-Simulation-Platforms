@@ -1,9 +1,10 @@
 """
-Safety hooks that wrap FaST-BRT filters for ``nav_core.sim`` (and later the
-ROS 2 node).  The filters themselves live in FaST-BRT; only unit conversion
-and the map -> scene interface are here.  ``fast_brt`` is imported lazily.
+Safety filters for ``nav_core.sim`` (and the ROS 2 node).  The backup filter
+and its witness search are here; the HJ value of the primitives comes from an
+offline V0 read with ``fast_brt.query`` (SFU-MARS/fast-brt, numpy only).
 """
 
-from .fastbrt_gatekeeper import FastBrtGatekeeper
+from .backup_filter import BackupFilter, Scene, load_v0, place_faces
+from .witness import find_witness
 
-__all__ = ["FastBrtGatekeeper"]
+__all__ = ["BackupFilter", "Scene", "find_witness", "load_v0", "place_faces"]

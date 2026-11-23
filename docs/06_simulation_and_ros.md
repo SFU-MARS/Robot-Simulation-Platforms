@@ -54,7 +54,7 @@ ep = run_episode(profile, world, x0, goal, nominal,
 | `events` | ObstacleTracker 的检测事件 |
 | `error` | filter 停下来时的原因 |
 
-**safety hook 的接口就是 `nav_core.safety.FastBrtGatekeeper`**，但 hook 只要求是个可调用对象，所以换别的 filter 很容易。
+**现在接在 safety hook 上的是 `nav_core.safety.BackupFilter`**，但 hook 只要求是个可调用对象，所以换别的 filter 很容易。
 
 ## 6.4 命令行 `run_sim.py`
 
@@ -64,18 +64,18 @@ cd nav_core
 # 默认场景，只用 pursuit（会撞）
 PYTHONPATH=. python scripts/run_sim.py
 
-# MPPI + gatekeeper + 打印检测事件
-PYTHONPATH=.:<FaST-BRT 路径> python scripts/run_sim.py \
-    --nominal mppi --filter gatekeeper --events
+# MPPI + backup filter + 打印检测事件（需要 profile 的 V₀ 文件，见 05）
+PYTHONPATH=. python scripts/run_sim.py \
+    --nominal mppi --filter backup --events
 
 # 换遮挡场景（地图范围自动按 world 定）
-PYTHONPATH=.:<FaST-BRT 路径> python scripts/run_sim.py \
-    --nominal mppi --filter gatekeeper \
+PYTHONPATH=. python scripts/run_sim.py \
+    --nominal mppi --filter backup \
     --world ../turtlebot3/turtlebot3_controls/worlds/occluded_4x4.world \
     --x0 -0.9 -1.4 0 --goal 0.9 -0.3 --t-max 60
 ```
 
-主要参数：`--robot --world --x0 --goal --t-max --noise --sensing-range --nominal --filter --unknown --events --out`
+主要参数：`--robot --world --x0 --goal --t-max --noise --sensing-range --nominal --filter --unknown --v0 --events --out`
 
 输出：终端打印结果、障碍面长度、检测事件；`outputs/` 下出一张四格图，含地图、真实障碍、障碍边、filter region 和轨迹。
 
@@ -96,11 +96,11 @@ PYTHONPATH=.:<FaST-BRT 路径> python scripts/run_sim.py \
 **和 `run_episode` 跑的是同一套逻辑**，节点本身很薄：
 
 ```
-/scan, /odom → 累积地图 → nominal (pursuit | mppi) → FaST-BRT gatekeeper → /cmd_vel
+/scan, /odom → 累积地图 → nominal (pursuit | mppi) → backup filter → /cmd_vel
 ```
 
 - 每个 control period 用最新 pose 积分最新 scan，算出这一周期的 turn rate；
-- 用一个 sub-period timer 把 gatekeeper 返回的 4 个 zero-order-hold turn rate 依次发出去；
+- 用一个 sub-period timer 把 backup filter 返回的 4 个 zero-order-hold turn rate 依次发出去；
 - 线速度恒为 profile 的 `v`；第一帧之前、到达 goal、filter 失败时发 0。
 
 只用到 `LaserScan` / `Odometry` / `Twist`，**Humble 和 Jazzy 完全一样**。
@@ -125,8 +125,8 @@ Gazebo 的 diff-drive odometry **以出生点为原点**。所以 launch 把 `x_
 ### 编译运行
 
 ```bash
-# nav_core 和 fast_brt 不是 ROS package，走 PYTHONPATH
-export PYTHONPATH=<repo>/nav_core:<FaST-BRT 路径>:$PYTHONPATH
+# nav_core 和 fast_brt 不是 ROS package，走 PYTHONPATH（fast_brt 只用到 numpy 的 fast_brt.query）
+export PYTHONPATH=<repo>/nav_core:<repo>/fast-brt:$PYTHONPATH
 
 cd turtlebot3
 colcon build --base-paths . ../ros2 --packages-select turtlebot3_controls fastbrt_nav

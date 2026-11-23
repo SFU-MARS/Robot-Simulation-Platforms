@@ -41,15 +41,14 @@ def test_occluded_world():
     assert origin == pytest.approx((-2.1, -2.1)) and size == pytest.approx((4.2, 4.2))
 
 
-def test_short_sensing_range_cannot_certify_the_start():
+def test_short_sensing_range_cannot_certify_the_start(v0):
     """unknown=occupied needs the first scan to hold a loiter circle: range >~ footprint + 2 turning radii."""
-    pytest.importorskip("fast_brt")
-    from nav_core.safety import FastBrtGatekeeper
+    from nav_core.safety import BackupFilter
     p0 = load_profile("burger")
     w = World.from_sdf(OCCLUDED, plane_z=p0.sensor.height)
     o, s = w.bounds()
     for R, expect in ((0.3, "init_failed"), (0.8, "reached")):
         p = dataclasses.replace(p0, sensor=dataclasses.replace(p0.sensor, range=R))
         ep = run_episode(p, w, (-0.9, -1.4, 0.0), (0.9, -0.3), make_nominal(p, "mppi"),
-                         safety=FastBrtGatekeeper(p), t_max=60, grid=OccupancyGrid(o, s, p.map.resolution))
+                         safety=BackupFilter(p, v0), t_max=60, grid=OccupancyGrid(o, s, p.map.resolution))
         assert ep.status == expect

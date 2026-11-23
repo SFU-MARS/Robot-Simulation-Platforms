@@ -1,8 +1,8 @@
-# 05 Safety filter：gatekeeper、witness 与 2D primitive
+# 05 Safety filter：backup filter、witness 与 2D primitive
 
-代码：[`nav_core/safety/fastbrt_gatekeeper.py`](../nav_core/nav_core/safety/fastbrt_gatekeeper.py)（adapter）+ FaST-BRT 的 `fast_brt/filter/gatekeeper.py`、`find_witness`（后路搜索）、`fast_brt/primitive.py`
+代码：[`nav_core/safety/backup_filter.py`](../nav_core/nav_core/safety/backup_filter.py)（`BackupFilter`、`Scene`、从地图到面）+ [`nav_core/safety/witness.py`](../nav_core/nav_core/safety/witness.py)（后路搜索）。primitive 的 value 来自离线导出的 `V₀`，由 fast-brt 的 [`fast_brt/query.py`](../fast-brt/fast_brt/query.py) 查询（纯 numpy）。
 
-这是整个系统里唯一 import `fast_brt` 的地方。
+> 2026-11-22 从 Hu-Hanyang/FaST-BRT 迁过来（roadmap 第 4 步），原名 witness gatekeeper / `FastBrtGatekeeper`。旧仓库不再使用。
 
 ## 5.1 安全是怎么定义的
 
@@ -10,7 +10,7 @@
 
 > **永远存在一条可以一直走下去而不碰障碍的路。**
 
-最简单的"一直走下去"是**绕最小圆**（loiter circle）：方向打死，绕半径 R 的圆一直转。于是得到 gatekeeper 的规则：
+最简单的"一直走下去"是**绕最小圆**（loiter circle）：方向打死，绕半径 R 的圆一直转。于是得到 backup filter 的规则：
 
 > 接受 nominal 的命令，当且仅当执行完之后，能找到一条 **witness**：
 > 一段 rollout 轨迹，全程保持 clearance，**末端停在一个完全自由的 loiter circle 上**。
@@ -21,27 +21,27 @@
 
 **安全不依赖 HJ value 算得准不准。** value 只用来提供候选控制、加速搜索；最终放行与否由 witness 的几何验证决定。
 
-## 5.2 一个周期里 gatekeeper 做什么
+## 5.2 一个周期里 backup filter 做什么
 
-`FastBrtGatekeeper.__call__(x, w_nom, grid)`：
+`BackupFilter.__call__(x, w_nom, grid)`：
 
 ```
-1. scene(x, grid)              构造这一帧的 scene（region + primitive）
-2. 首次调用：commit_initial    在起点先找一条 witness；找不到 → RuntimeError（机器人不出发）
-3. 模拟 nominal 的这 0.2 秒    step_arc 走 n_sub 个 sub-step，记录最低 margin
-4. gate.filter(...)            从终点找新 witness
+1. scene(x, grid)              构造这一帧的 Scene（region + primitive）
+2. 首次调用：在起点先找一条 witness；找不到 → RuntimeError（机器人不出发）
+3. 模拟 nominal 的这 0.2 秒    arc_step 走 n_sub 个 sub-step，记录最低 margin
+4. 从终点找新 witness
       找到 → 放行 w_nom，存下新 witness
-      没找到 → 拒绝，返回上一周期存的 witness 的前 n_sub 步
+      没找到 → 拒绝，返回上一周期存的 witness 的前 n_sub 步（之后接着绕 loiter circle）
 5. 返回 n_sub 个 turn rate（物理单位）
 ```
 
 `n_sub = ctrl_dt / sub_dt`，Burger 是 `0.2 / 0.05 = 4`。所以每个控制周期输出 4 个 zero-order-hold 的 turn rate。
 
-### witness 搜索（FaST-BRT 的 `find_witness`）
+### witness 搜索（`witness.find_witness`）
 
-从给定状态出发，按优先级把一批候选控制序列**一次性批量 rollout**：
+从给定状态出发，按优先级把一批候选控制序列**一次性批量 rollout**（`arc_step` 是精确的圆弧积分）：
 
-1. **HJ switching policy**：`ω = w_max · sign(∂V₀/∂θ)`，沿着最紧的那个 primitive 的 value 梯度逃离；
+1. **HJ 控制**：最近的那个 primitive 的 `ω = w_max · sign(∂V/∂θ)`（`Scene.hj_control`，闭环，每步重新查询）；
 2. 恒定左转 `+1`、恒定右转 `−1`、直行 `0`；
 3. "先直行 k 步再打死"的组合（k = 5, 10, 15, …）。
 
@@ -52,130 +52,86 @@ Burger 的配置下 horizon = 2.0 模型时间、`sub_dt = 0.05`，所以 K = 40
 - 全程 `margin > clearance`（margin 来自 scene，见 §5.4）；
 - 终点状态的 **loiter circle**（左右各试一次，72 个采样点）整圈都 `margin > clearance`。
 
-第一条同时满足的就是 witness。都不满足则返回 `None`。
+第一条同时满足的就是 witness。都不满足则返回 `None`。clearance 必须盖住采样间隙（`witness_slack`：圆弧上 `dt/2`，圆上 `2R·sin(π/144)`），否则直接报错。
 
-整个搜索是一次批量 rollout，在 laptop 上每步 15–35 ms。
+旧仓库里的 B&B 搜索、prefix witness、deadline 等选项没有迁过来（实验里一直用的是 dive）。
 
-## 5.3 2D primitive：一条边一个，value 靠平移得到
-
-这是 FaST-BRT 的核心，代码在 `fast_brt/primitive.py`。
+## 5.3 2D primitive：一条边一个，value 从同一个 V₀ 查出来
 
 ### 为什么需要它
 
-直接对整个场景解一次 HJ value function 是很贵的，而且地图每个周期都在变。FaST-BRT 的做法是：
+直接对整个场景解一次 HJ value function 是很贵的，而且地图每个周期都在变。做法是：
 
-> 把障碍拆成一条条**边（facing side）**，每条边对应一个 primitive；
-> 所有 primitive 的 value **由同一个 base value `V₀` 平移旋转得到，不用重新求解**。
+> 把障碍拆成一条条**面（face）**，每个面对应一个 primitive；
+> 所有 primitive 的 value **由同一个离线 `V₀` 平移旋转得到，不用重新求解**。
 
-### 标准 primitive 的形状
+### 标准 primitive 和长度平移
 
-长度为 L 的标准 primitive，是一个沿局部 x 轴方向、很薄的矩形：
-
-```
-|p_x| ≤ L/2 ,  |p_y| ≤ L / (2√α)
-```
-
-`α` 是"细长比"参数，默认 **α = 20**，所以厚度约是长度的 1/4.5。
-
-它的 terminal cost（quadratic encoding，论文用的那个）：
+长度为 L 的 primitive 是一个沿局部 x 轴、很薄的矩形 `|p_x| ≤ L/2, |p_y| ≤ L/(2√α)`，**线性编码**：
 
 ```
-ℓ_L(p) = max(p_x² , α p_y²) − L²/4
+ℓ_L(p) = max(|p_x|, √α |p_y|) − L/2
 ```
 
-注意 **L 只以常数 `q_L = L²/4` 的形式出现**。这就带来了关键性质：
+L 只以常数 `L/2` 出现，所以 `V_L = V₀ − L/2`（`V₀` 是 L = 0 的核），对任意 L 精确成立；位姿平移 `V(x) = V₀(g⁻¹x) − L/2`，`g = (c, β)`。二次编码（`max(p_x², α p_y²) − L²/4`）保留成选项（导出时 `--encoding quadratic`，filter 用 `v0=` 指定文件），用来比较两种编码的差距；它的数值误差大，见 [10 §10.3](10_primitive_alpha_accuracy.md)。
 
-### 精确平移（exact transport）
+### 离线 V₀
 
-对任意 horizon s：
+**精度规则**：要进 local update 的 primitive 必须用 `accuracy="low"`（local update 的 kernel 是一阶格式，两边格式不一致时修正区域会扩张到整张网格）。`medium` 的 `V₀` 更准（线性编码前沿平均误差 0.036 R，low 是 0.088 R），只用于点查询，暂时不能用于 local update。backup filter 的安全不依赖 `V₀` 的精度，两种都能用。
 
-```
-长度平移：  V_L^s(p) = V_0^s(p) − q_L           其中 q_L = L²/4
-位姿平移：  V^s(x)   = V_0^s(g⁻¹ x) − q_L       g = (center, β) 是这条边的位姿
-```
+`V₀` 在 mars-14 上用 odp 解一次（fast-brt：`python -m fast_brt export-v0 --config configs/v0_dubins_3d.json`），只存最后一层：线性编码、`accuracy="low"`（默认）、241×241×60 网格、[−6, 6]²、α = 20、BRT、T = 2。文件约 14 MB，路径写在 `robots/burger.yaml` 的 `base_value`（`fast-brt/results/v0/…npz`，不进 git）。α 由 `V₀` 决定。在线只做插值，40 个面 × 2000 个状态约 7 ms。
 
-也就是说：**离线只解一次 `V₀`，在线任何一条边的 value 都只是"把查询点变换到标准坐标系 → 查表 → 减一个常数"。** 完全没有在线求解。
+### 内移放置（默认）
 
-代码里：
+对面 `(a, b, n)`（n 指向自由空间），矩形朝向自由空间的那条边和面重合，厚度全在障碍内：`c = (a+b)/2 − n·L/(2√α)`。BRT 朝自由空间一侧的范围只由 L 决定，长面不用切段（[10 §10.2](10_primitive_alpha_accuracy.md)）。`fast_brt.query.PrimitiveV0.place` 还做两件事：
 
-- `BaseValue.__init__` 解一次 `V₀`，存成 41 个时间切片（s = 0, 0.05, …, 2.0），grid 是 121×121×60，在 laptop 上约 **1 秒**；
-- `BaseValue.side_values_many(states, frames, s)` 批量算所有边的 `V_i^s`；
-- `U(x) = min_i V_i(x)` 是所有 primitive 的最小值，`U ≤ 0` 表示"至少被一条边判定为注定要撞"。
+- **短面延长**：短于 `l_min = 2·dx·√α`（0.45 R，Burger 上 4.5 cm）的面对称延长到 `l_min`；
+- **长面厚度封顶**：长于 `l_ref`（V₀ 网格可靠区能放下的最长面，4 R = 0.4 m）的面长度不变，厚度封顶为 `l_ref/√α`，面中段取长度 `l_ref` 的面中心处的值。对封顶后的矩形这是精确的，实测 L = 8、16 R 的前沿误差和 L = 4 R 相同（[11](11_roadmap.md) §11.3）。二次编码用 `ℓ_q = ℓ_l(ℓ_l + L)`（严格递增）从参考面换算，连续意义下同样精确；但二次编码的数值误差随 L 变（面越长越准），换算只能沿用 L = 4 R 参考面的误差，所以长面会比直接求解多低估约 0.04–0.06 R（81 网格一阶格式的测试）。线性编码没有这个问题。
 
-### side_frame：从一条边到一个 primitive
+离网格边缘 vT 以内的值会被边界条件扭曲，落在这里的点返回下界 `min_{可达范围} ℓ`（保守，且 ≥ 0）。
 
-```python
-side_frame(a, b, alpha)  →  Rect(center=(a+b)/2, half_len=L/2, half_wid=L/(2√α), angle=β)
-```
+旧的放法（`placement="centered"`，以面为中线，配合 `cut=True` 把面切成 ≤ `2 h_max √α` 的小段）仍然保留成选项，用来对比。
 
-把线段 `a→b` 的中点、长度、方向直接变成 primitive 的位姿。
+## 5.4 Scene：把 region 和 primitive 粘起来
 
-### 长边要切短（当前部署，**需要修正**）
-
-> **这是一个部署偏差。** primitive 的设计意图是：矩形朝向自由空间的那条边和检测到的面重合，厚度 `L/√α` 全部落在障碍内部，这样 BRT 朝自由空间一侧的范围**只由长度 L 决定**，厚度无关紧要，长墙也不用切。
->
-> 现在的代码沿用了 FaST-BRT 的 `side_frame`，把矩形**以面为中线对称放置**，于是一半厚度伸进了自由空间，只好再把面切成小段来限制伸出（FaST-BRT 当初选 α=20 加切边，也是为了补偿这一点）。切段还会在共线的接缝处制造额外的 leak。
->
-> 修正方法是把中心沿法向往障碍内侧挪半个厚度：`center = (a+b)/2 − n · L/(2√α)`，见 [03 §3.0 (8)](03_mapping.md)。修正后 α 只影响数值精度和"矩形穿出薄障碍背面"的程度，需要单独做一组选 α 的实验。
-
-下面描述的是**当前**的做法：
-
-
-primitive 的**厚度和长度是绑定的**：半宽 = `L / (2√α)`。一面 1.35 m 长的墙，对应的矩形会往自由空间里伸出 15 cm，在 2 m 的场地里直接把通道堵死。
-
-所以 adapter 用 `max_side_len(h_max, α) = 2 h_max √α` 把边切成小段，让每段伸出不超过 `h_max`：
-
-```
-h_max = 1 cell = 0.02 m  →  L_max = 2 × 0.2 × √20 = 1.789 模型单位 = 0.179 m
-```
-
-Burger 实测：第一帧 18 个 primitive，长度 0.095–0.165 m，半宽 0.011–0.018 m（即 ≤ 1 cell）。
-
-切开**不影响安全**：witness 的碰撞检查用的是 region 的 signed distance，不是 primitive 矩形（见下一节）。切开只影响 HJ 项的保守程度。
-
-## 5.4 RegionScene：把 region 和 primitive 粘起来
-
-FaST-BRT 的 `SceneModel` 假设场景是**一个简单多边形**（论文里的单帧 visibility polygon）。我们的累积地图里自由区域可能带洞（孤立的柱子），所以 adapter 里写了一个子类 `RegionScene`：
+累积地图里自由区域可能带洞（孤立的柱子），所以 `Scene` 同时带着 region 的 ring 和 primitive：
 
 | 接口 | 来源 | 作用 |
 | --- | --- | --- |
 | `margin(xy)` | **region**：到 outer/inner ring 的 signed distance（区域内为正）；再和 primitive 矩形取 min | witness 的碰撞判据，**决定安全** |
-| `side_values` / `U` / `U_s` | **primitive**：`V_0` 平移查表 | HJ 项，提供候选控制、剪枝 |
-| `hj_switch(states)` | primitive 的 `∂V₀/∂θ` 符号 | HJ switching 候选 |
-| `loiter_side(state, R)` | `margin` | 判断左/右 loiter circle 是否自由 |
-| `clearance` | profile 的 1.5 cell | 采样余量 |
+| `value(states)` | **primitive**：`V₀` 查询，各面取 min | HJ value（`hj` / `hj_backup` mode 用） |
+| `hj_control(states)` | 最近的 primitive 的 `∂V/∂θ` 符号 | HJ 候选 |
+| `frames` | primitive 矩形 (center, half_len, half_wid, β) | 画图、检查 |
+| `clearance`, `T` | profile 的 1.5 cell；horizon | 采样余量；rollout 长度 |
 
 **这就是 Design decision 1 在代码里的落点**：安全走 region，primitive 只管效率。
-
-`RegionScene` 按分工应该放到 FaST-BRT 里（在 TODO 里），现在暂放本 repo 以免和师妹的改动冲突。
 
 ## 5.5 关键参数
 
 ```python
-FastBrtGatekeeper(profile,
-                  unknown="occupied",   # occupied | free
-                  primitives="faces",   # faces | rings
-                  alpha=20.0,
-                  horizon=2.0,          # 模型时间单位
-                  sub_dt=0.05,
-                  clearance=None,       # 默认 1.5 cell
-                  h_max=None,           # 默认 1 cell
-                  search="dive", budget=300)
+BackupFilter(profile,
+             v0=None,               # PrimitiveV0 或 V₀ 文件；None：profile 的 base_value
+             unknown="occupied",    # occupied | free
+             primitives="faces",    # faces | rings
+             placement="inward",    # inward | centered
+             cut=False,             # 只配合 centered 用
+             horizon=2.0,           # 模型时间单位
+             sub_dt=0.05,
+             clearance=None,        # 默认 1.5 cell
+             h_max=None,            # cut 时每段伸出的上限，默认 1 cell
+             use_hj=True)           # HJ 候选放在最前面
 ```
 
 | 参数 | Burger 实际值 | 说明 |
 | --- | --- | --- |
 | `clearance` | 1.5 cell = 3 cm = 0.3 模型单位 | 覆盖栅格分辨率带来的误差：marching squares 的等值线和格心距离可能比真实自由空间多出约 1 个 cell |
-| `h_max` | 1 cell = 2 cm | primitive 伸出边的最大距离 |
 | `horizon` | 2.0 模型单位 = 2.0 s | witness 的 rollout 长度，K = 40 步 |
 | loiter 半径 R | 1 模型单位 = 0.1 m | 等于转弯半径 |
 
 `primitives` 的两个取值：
 
-- **`"faces"`（默认）**：primitive 来自障碍层的 face（已按 footprint 外推），`unknown="occupied"` 时再加上 frontier 边。同时 `gate.obstacles` / `gate.events` 带稳定 ID，给 leaking-corner 用。
+- **`"faces"`（默认）**：primitive 来自障碍层的 face（已按 footprint 外推），`unknown="occupied"` 时再加上 frontier 边。同时 `filter.obstacles` / `filter.events` 带稳定 ID，给 leaking-corner 用。
 - **`"rings"`**：primitive 直接取 region 每条 ring 的边（早期做法，保留做对比）。
-
-两者安全性相同（都是 0 碰撞），但 `faces` 离障碍更远一些（最小距离 3.4 → 5.5 cm），因为 face 是包裹出来的、拐角是方的。
 
 ## 5.6 结构性限制：窄通道进不去
 
@@ -188,7 +144,7 @@ loiter circle 需要的自由空间：
  ≈ 0.45 m 宽
 ```
 
-`hj_reach_target` 里 obstacle 1 和北墙之间只有 **0.4 m**。机器人车身只有 0.21 m 宽，物理上过得去，但进去之后放不下 loiter circle，后路断了，**gatekeeper 永远不放行**。于是机器人在入口外绕圈直到超时。
+`hj_reach_target` 里 obstacle 1 和北墙之间只有 **0.4 m**。机器人车身只有 0.21 m 宽，物理上过得去，但进去之后放不下 loiter circle，后路断了，**backup filter 永远不放行**。于是机器人在入口外绕圈直到超时。
 
 这不是 bug，是 constant-speed 模型加 loiter 终端集合的固有保守性。**能刹车的 Dubins4D（QBot）没有这个问题**：它的后路可以是"直接停下"，不需要一块能绕圈的空地。
 

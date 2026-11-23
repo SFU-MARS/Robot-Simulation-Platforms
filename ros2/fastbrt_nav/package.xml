@@ -3,7 +3,7 @@
 <package format="3">
   <name>fastbrt_nav</name>
   <version>0.0.1</version>
-  <description>LiDAR navigation in an unknown map with the FaST-BRT safety filter (nav_core + fast_brt on PYTHONPATH)</description>
+  <description>LiDAR navigation in an unknown map with the FaST-BRT safety filter (nav_core and fast-brt's fast_brt.query on PYTHONPATH)</description>
   <maintainer email="wherehhy@gmail.com">Hanyang</maintainer>
   <license>TODO</license>
 

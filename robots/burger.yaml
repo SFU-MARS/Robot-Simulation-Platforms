@@ -23,4 +23,5 @@ map:
   size: [2.1, 2.1]               # m
   resolution: 0.02               # m / cell
 world: turtlebot3/turtlebot3_controls/hj_reach_target.world
-base_value: null                 # offline value file (FaST-BRT), set once it is computed
+base_value: fast-brt/results/v0/v0_dubins_3d_linear_alpha20_low.npz      # offline V0 (fast-brt export-v0,
+                                 # configs/v0_dubins_3d.json), relative to the repo root; not in git
