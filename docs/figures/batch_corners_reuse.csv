@@ -1,0 +1,5 @@
+robot,world,range_m,nominal,filter,v0,placement,corners,margin_m,episodes,reached,collision,timeout,init_failed,other,min_clearance_m,intervention_rate,median_time_to_goal_s,primitives_last,ms_per_step,corner_solves,corner_ms_per_step
+burger,hj,0.8,mppi,"hj, unknown occupied","linear, low, alpha 20",inward,delayed,,26,23,3,0,0,0,-0.0018,0.037,16.9,13.7,89.2,318,71.3
+burger,hj,0.8,mppi,"hj_backup, unknown occupied","linear, low, alpha 20",inward,delayed,,26,15,0,11,0,0,0.0404,0.366,13.5,12.3,69.8,470,40.4
+burger,occluded,0.8,mppi,"hj, unknown occupied","linear, low, alpha 20",inward,delayed,,23,22,0,1,0,0,0.0098,0.022,28.5,36.1,154.6,953,93.6
+burger,occluded,0.8,mppi,"hj_backup, unknown occupied","linear, low, alpha 20",inward,delayed,,23,14,0,9,0,0,0.03,0.407,42.8,37.1,128.8,1258,56.3

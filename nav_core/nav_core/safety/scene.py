@@ -288,7 +288,8 @@ class SceneFilter:
     stationary local update on a window around each corner (spacing ``corner_dx``, model units; ``corner_theta``
     headings, default 30,
     None: as many as V0), solved when the corner appears or its
-    faces move by more than ``corner_reuse``; the scene's value, margin and HJ control use the corrected values.
+    faces (clipped to the window) move by more than ``corner_reuse`` (default 1.5 map cells); the scene's value,
+    margin and HJ control use the corrected values.
     Only corners between obstacle faces by default; ``corner_frontier=True`` also corrects corners with a frontier
     edge (no difference in safety in the batches of docs/13, 23-32 % more solve time: the frontier moves every scan).
     ``corner_mode``: "sync" (solve at once), "delayed" (simulation: the result is usable once the measured solve
@@ -364,12 +365,17 @@ class SceneFilter:
             raise ValueError(f"ctrl_dt {ctrl_dt} (model time) is not a multiple of sub_dt {sub_dt}")
         self.steps = self.interventions = 0
         self.model = None                              # last scene, for plots
-        # corner correction (docs/13): windows near the robot, a solved window reused while its faces stay within
-        # corner_reuse (model units, 0.2 = 2 cm on the Burger, below the clearance) of the ones it was solved for
-        # corner_dx None: fast_brt.corner.window_defaults (0.1 for 3D, 0.05 for 4D); corner_reuse None: 0.2 (3D, 2 cm
-        # on the Burger) or 0.02 (4D, 3.2 cm on the QBot)
+        # corner correction (docs/13): windows near the robot, a solved window reused while its faces, clipped to
+        # the window, stay within corner_reuse (model units; None: 1.5 map cells, 3 cm on the Burger, 6 cm on the
+        # QBot: the faces of a growing map jitter by a cell) of the ones it was solved for.
+        # corner_dx None: fast_brt.corner.window_defaults (0.1 for 3D, 0.05 for 4D)
         if corner_reuse is None:
-            corner_reuse = 0.02 if self.four else 0.2
+            corner_reuse = 1.5 * res / self.units.length
+        if corners and self.four:
+            from fast_brt.corner import numba_available
+            if not numba_available():
+                raise ImportError("the corner correction of the 4D car needs numba (1-6 s per window in numpy, about "
+                                  "0.6-1.2 s compiled): pip install numba (0.56.4 with numpy 1.21 on ROS 2 Humble)")
         self.corners, self.corner_dx, self.corner_reuse = corners, corner_dx, corner_reuse
         self.corner_frontier, self.corner_theta, self.corner_warm = corner_frontier, corner_theta, corner_warm
         self.corner_warm_solves = 0
@@ -456,21 +462,23 @@ class SceneFilter:
         windows, slots = [], []
         for spec in corner.corner_windows(self.v0, faces, dx=self.corner_dx, n_theta=self.corner_theta):
             if not self.corner_frontier and self._n_obstacle_faces is not None:
+                # only corners between obstacle faces, solved with the obstacle faces only: the frontier stays in the
+                # union, but it moves with every scan and would make every window stale
                 spec.pairs = [pr for pr in spec.pairs if max(pr[1], pr[2]) < self._n_obstacle_faces]
+                spec.faces = tuple(k for k in spec.faces if k < self._n_obstacle_faces)
                 if not spec.pairs:
                     continue
             center = np.asarray(spec.grid.center)
             if xy is not None and np.max(np.abs(center - xy)) > self.v0.reach + spec.grid.half:
                 continue
-            mine = segments[list(spec.faces)]
+            mine = _clip_segments(segments[list(spec.faces)], center, spec.grid.half)
             match = (spec.grid.half - corner.window_defaults(self.v0)["edge"]) / 2.0
             free = [sl for sl in self._slots if all(sl is not t for t in slots)]
             slot = min(free, key=lambda sl: float(np.max(np.abs(sl["center"] - center))), default=None)
             if slot is None or np.max(np.abs(slot["center"] - center)) > match:
                 slot = {"center": center, "segs": None, "window": None, "job": None}
             slot["center"] = center
-            fresh = (slot["window"] is not None and len(slot["segs"]) == len(mine)
-                     and _segments_close(slot["segs"], mine, self.corner_reuse))
+            fresh = slot["window"] is not None and _segments_close(slot["segs"], mine, self.corner_reuse)
             if not fresh and slot["job"] is None:
                 self._submit(slot, faces, spec, mine, now)
                 fresh = slot["job"] is None            # "sync": solved already
@@ -522,12 +530,46 @@ class SceneFilter:
             slot["window"], slot["segs"], slot["job"] = window, job["segs"], None
 
 
+def _clip_segments(segs: np.ndarray, center, half: float) -> np.ndarray:
+    """The parts of the segments (m, 2, 2) inside the square |p - center| <= half (Liang-Barsky); segments outside
+    are dropped."""
+    out = []
+    c = np.asarray(center, float)
+    for a, b in segs:
+        d = b - a
+        t0, t1 = 0.0, 1.0
+        for k in range(2):
+            for p, q in ((-d[k], a[k] - (c[k] - half)), (d[k], (c[k] + half) - a[k])):
+                if abs(p) < 1e-15:
+                    if q < 0:
+                        t0, t1 = 1.0, 0.0
+                elif p < 0:
+                    t0 = max(t0, q / p)
+                else:
+                    t1 = min(t1, q / p)
+        if t0 <= t1:
+            out.append((a + t0 * d, a + t1 * d))
+    return np.array(out, float).reshape(-1, 2, 2)
+
+
+def _point_segments(pts: np.ndarray, segs: np.ndarray) -> np.ndarray:
+    """Distance of every point (n, 2) to the nearest segment (m, 2, 2)."""
+    a, ab = segs[:, 0], segs[:, 1] - segs[:, 0]
+    ap = pts[:, None, :] - a[None]
+    t = np.clip(np.sum(ap * ab[None], -1) / np.maximum(np.sum(ab * ab, -1), 1e-12)[None], 0.0, 1.0)
+    return np.linalg.norm(ap - t[..., None] * ab[None], axis=-1).min(axis=1)
+
+
 def _segments_close(a: np.ndarray, b: np.ndarray, tol: float) -> bool:
-    """Every segment of a has one in b with both ends (either order) within tol, and the other way round."""
-    def covered(x, y):
-        for s in x:
-            d = np.minimum(np.abs(y - s).max(axis=(1, 2)), np.abs(y[:, ::-1] - s).max(axis=(1, 2)))
-            if d.min() > tol:
-                return False
-        return True
-    return covered(a, b) and covered(b, a)
+    """The two sets of segments are within tol of each other (Hausdorff distance, sampled every tol / 2): faces that
+    split, merge or only jitter keep a solved window."""
+    if len(a) == 0 or len(b) == 0:
+        return len(a) == len(b)
+
+    def samples(segs):
+        pts = []
+        for p, q in segs:
+            n = int(np.ceil(np.linalg.norm(q - p) / (tol / 2.0))) + 1
+            pts.append(p + np.linspace(0.0, 1.0, n)[:, None] * (q - p))
+        return np.vstack(pts)
+    return _point_segments(samples(a), b).max() <= tol and _point_segments(samples(b), a).max() <= tol

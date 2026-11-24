@@ -1,0 +1,5 @@
+robot,world,range_m,nominal,filter,v0,placement,corners,margin_m,episodes,reached,collision,timeout,init_failed,other,min_clearance_m,intervention_rate,median_time_to_goal_s,primitives_last,ms_per_step,corner_solves,corner_ms_per_step
+qbot,arena,2.0,mppi,"hj, unknown occupied","linear, low, alpha 20",inward,delayed,,40,33,0,7,0,0,0.0375,0.046,8.8,17.4,179.3,746,153.0
+qbot,arena,2.0,pursuit,"hj, unknown occupied","linear, low, alpha 20",inward,delayed,,40,27,2,11,0,0,-0.0017,0.25,6.8,17.0,132.8,613,112.0
+qbot,occluded6,2.0,mppi,"hj, unknown occupied","linear, low, alpha 20",inward,delayed,,35,32,0,3,0,0,0.097,0.049,16.9,32.5,286.3,1328,237.9
+qbot,occluded6,2.0,pursuit,"hj, unknown occupied","linear, low, alpha 20",inward,delayed,,35,14,1,20,0,0,-0.0001,0.366,5.7,24.3,120.5,813,85.6

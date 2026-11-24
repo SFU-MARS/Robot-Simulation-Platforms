@@ -81,9 +81,12 @@ def loiter_sides(states: np.ndarray, scene, R: float = R_LOITER) -> np.ndarray:
     return np.where(left, 1.0, np.where(right, -1.0, 0.0))
 
 
-def find_witness(x0, scene, dt: float, use_hj: bool = True) -> Optional[Tuple[np.ndarray, float]]:
+def find_witness(x0, scene, dt: float, use_hj: bool = True, info: Optional[dict] = None
+                 ) -> Optional[Tuple[np.ndarray, float]]:
     """First candidate (priority order, see the module docstring) that keeps margin > clearance and
-    ends on a free loiter circle.  Returns (controls (K,), loiter direction +1 / -1) or None."""
+    ends on a free loiter circle.  Returns (controls (K,), loiter direction +1 / -1) or None.  ``info``
+    (a dict) gets "candidates" and "index" (of the witness in priority order, 0 = the HJ one with use_hj;
+    None without a witness)."""
     slack = witness_slack(dt)
     if scene.clearance < slack:
         raise ValueError(f"clearance {scene.clearance:g} < witness sampling slack {slack:.4g} (dt = {dt:g})")
@@ -102,12 +105,16 @@ def find_witness(x0, scene, dt: float, use_hj: bool = True) -> Optional[Tuple[np
         arc_step(z, w, dt)
         margin = np.minimum(margin, scene.margin(z[:, :2]))
     ok = np.flatnonzero(margin > scene.clearance)
+    if info is not None:
+        info["candidates"], info["index"] = C, None
     if ok.size == 0:
         return None
     sides = loiter_sides(z[ok], scene)
     hit = np.flatnonzero(sides != 0.0)
     if hit.size == 0:
         return None
+    if info is not None:
+        info["index"] = int(ok[hit[0]])
     return controls[ok[hit[0]]], float(sides[hit[0]])
 
 
@@ -122,12 +129,14 @@ def witness_slack_4d(dt: float, v_bound: float = 1.0) -> float:
     return v_bound * dt / 2.0
 
 
-def find_witness_4d(x0, scene, plant, dt: float, use_hj: bool = True) -> Optional[Tuple[np.ndarray, None]]:
+def find_witness_4d(x0, scene, plant, dt: float, use_hj: bool = True, info: Optional[dict] = None
+                    ) -> Optional[Tuple[np.ndarray, None]]:
     """Dubins 4D (model units, state (x, y, theta, v), ``plant`` a ``Dubins4D`` in model units): the first
     candidate that brakes to a stop, keeping margin > clearance on the way.  Every candidate brakes as hard as
     needed, a = clip(-v / dt, -a_max, a_max), so the speed reaches 0 exactly at the end of a step; they differ in
     the turn rate held while braking: the HJ control's (closed loop), then ``W_BRAKE``.  Stopped is safe forever
-    (static obstacles, the map only gains free space).  Returns (controls (K, 2), None) or None."""
+    (static obstacles, the map only gains free space).  Returns (controls (K, 2), None) or None.  ``info`` as
+    for ``find_witness``."""
     slack = witness_slack_4d(dt, max(abs(plant.v_min), abs(plant.v_max)))
     if scene.clearance < slack:
         raise ValueError(f"clearance {scene.clearance:g} < witness sampling slack {slack:.4g} (dt = {dt:g})")
@@ -149,6 +158,8 @@ def find_witness_4d(x0, scene, plant, dt: float, use_hj: bool = True) -> Optiona
         z[np.abs(z[:, 3]) < 1e-12, 3] = 0.0
         margin = np.minimum(margin, scene.margin(z[:, :2]))
     ok = np.flatnonzero((margin > scene.clearance) & (z[:, 3] == 0.0))
+    if info is not None:
+        info["candidates"], info["index"] = C, (int(ok[0]) if ok.size else None)
     if ok.size == 0:
         return None
     return controls[ok[0]], None

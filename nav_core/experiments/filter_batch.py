@@ -39,6 +39,26 @@ PLACEMENTS = {"inward": dict(placement="inward", cut=False), "centered+cut": dic
 
 
 QBOT_WORLDS = ("arena", "occluded6")
+GAPS = {"dubins3d": (0.35, 0.45, 0.55, 0.65), "dubins4d": (0.7, 0.85, 1.0, 1.2)}    # gap widths (m) of "gaps"
+EPISODES = []                                      # one record per episode, for paired comparisons (--episodes-out)
+
+
+def gap_worlds(profile) -> dict:
+    """A room split by a wall with one gap (width w) in its middle: starts on the left, goals on the right, so every
+    episode has to pass the gap. Burger: room 2 x 2 m, wall 5 cm; QBot: 3.6 x 3.6 m, wall 10 cm."""
+    four = profile.dynamics == "dubins4d"
+    half, t = (1.8, 0.1) if four else (1.0, 0.05)
+    out = {}
+    for w in GAPS[profile.dynamics]:
+        boxes = [Box((0.0, half + 0.025), (half + 0.05, 0.025)), Box((0.0, -half - 0.025), (half + 0.05, 0.025)),
+                 Box((-half - 0.025, 0.0), (0.025, half)), Box((half + 0.025, 0.0), (0.025, half)),
+                 Box((0.0, (half + w / 2) / 2), (t / 2, (half - w / 2) / 2)),
+                 Box((0.0, -(half + w / 2) / 2), (t / 2, (half - w / 2) / 2))]
+        goals = [(1.1, 0.8), (1.1, -0.8)] if four else [(0.6, 0.5), (0.6, -0.5)]
+        out[f"gap{w:g}"] = {"w": World(boxes), "xs": (-half + 0.3, -0.4) if four else (-half + 0.2, -0.25),
+                            "xy": (-half + 0.3, half - 0.3) if four else (-half + 0.2, half - 0.2),
+                            "goals": list(goals), "n": 6, "grid": None}
+    return out
 
 
 def worlds(profile):
@@ -55,6 +75,7 @@ def worlds(profile):
             "occluded6": {"w": occ6, "xy": (-2.6, 2.6), "goals": [(2.3, 0.0), (-2.4, -0.2), (0.0, -2.2), (2.3, 2.4),
                                                                   (-1.0, 2.3), (-2.5, 2.3)], "n": 6,
                           "grid": occ6.bounds()},
+            **gap_worlds(profile),
         }
     hj = World.from_sdf(root / profile.world, plane_z=profile.sensor.height)
     occ = World.from_sdf(root / "turtlebot3/turtlebot3_controls/worlds/occluded_4x4.world",
@@ -66,6 +87,7 @@ def worlds(profile):
                    "goals": [(0.6, 0.6), (-0.6, 0.6), (0.6, -0.6), (-0.6, -0.6)], "n": 8, "grid": None},
         "occluded": {"w": occ, "xy": (-1.8, 1.8), "goals": [(1.7, 0.6), (-1.6, -0.4), (0.9, -1.6), (-0.3, 1.7)],
                      "n": 6, "grid": occ.bounds()},
+        **gap_worlds(profile),
     }
 
 
@@ -75,6 +97,8 @@ def cases(world, profile, seed=1):
     starts = []
     while len(starts) < world["n"]:
         x = np.r_[rng.uniform(*world["xy"], 2), rng.uniform(-np.pi, np.pi)]
+        if "xs" in world:                                  # starts restricted in x (the gap worlds: the left side)
+            x[0] = rng.uniform(*world["xs"])
         if world["w"].distance(x[None, :2])[0] > profile.footprint_radius + 0.12:
             starts.append(x)
     goals = [np.array(g) for g in world["goals"]]
@@ -82,10 +106,14 @@ def cases(world, profile, seed=1):
 
 
 def run(profile, world, v0, kw, unknown="occupied", nominal="mppi", kind="backup", t_max=100.0, corner_kw=None,
-        margin=None, goal_radius=0.1):
-    """One batch with filter ``kind`` (backup | hj | hj_backup | none); v0 and kw (placement) are ignored without a filter."""
+        margin=None, goal_radius=0.1, label=None):
+    """One batch with filter ``kind`` (backup | hj | hj_backup | none); v0 and kw (placement) are ignored without a filter.
+    Every episode is also recorded in EPISODES (with ``label``), the same episode index for the same world in every
+    batch: the same start, goal and seeds, so batches that differ in one setting compare episode by episode."""
     c, clr, interv, prims, t_goal, steps, t0 = collections.Counter(), np.inf, [], [], [], 0, time.perf_counter()
     solves, corner_s = 0, 0.0
+    agg = collections.Counter()
+    step_all, path_ratio = [], []
     todo = cases(world, profile)
     for i, (x0, goal) in enumerate(todo):
         extra = {} if margin is None else {"margin": margin}
@@ -93,8 +121,48 @@ def run(profile, world, v0, kw, unknown="occupied", nominal="mppi", kind="backup
                            **(dict(kw, **(corner_kw or {}), **extra) if kind != "none" else {}))
         grid = None if world["grid"] is None else OccupancyGrid(*world["grid"], profile.map.resolution)
         nom = make_nominal(profile, nominal, **({"seed": i} if nominal == "mppi" else {}))
-        ep = run_episode(profile, world["w"], x0, goal, nom, safety=gate, t_max=t_max, seed=i, grid=grid,
+        step_ms = []
+        safety = None
+        if gate is not None:
+            def safety(x, u, g, _gate=gate):
+                # time of the control step itself: a corner solve ("sync" / "delayed") runs on a worker online
+                c0, s0 = getattr(_gate, "corner_seconds", 0.0), time.perf_counter()
+                out = _gate(x, u, g)
+                step_ms.append(1000 * (time.perf_counter() - s0 - (getattr(_gate, "corner_seconds", 0.0) - c0)))
+                return out
+        ep = run_episode(profile, world["w"], x0, goal, nom, safety=safety, t_max=t_max, seed=i, grid=grid,
                          goal_radius=goal_radius)
+        path = float(np.sum(np.linalg.norm(np.diff(ep.traj[:, :2], axis=0), axis=1)))
+        straight = float(np.linalg.norm(np.asarray(x0[:2]) - goal))
+        rec = {"label": label, "world": world.get("name"), "episode": i, "status": ep.status, "t": round(ep.t, 2),
+               "path_m": round(path, 3), "straight_m": round(straight, 3), "steps": len(ep.cmds),
+               "min_clearance_m": round(float(world["w"].distance(ep.traj[:, :2]).min() - profile.footprint_radius), 4)}
+        if gate is not None:
+            backup_rej = getattr(gate, "backup_interventions", None)
+            if backup_rej is None and hasattr(gate, "searches"):
+                backup_rej = gate.interventions                   # the backup filter: every intervention is one
+            hj_ev = getattr(gate, "hj_interventions", None)
+            if hj_ev is None and not hasattr(gate, "searches"):
+                hj_ev = gate.interventions                        # the HJ filter
+            rec.update({"interventions": gate.interventions, "backup_rejections": backup_rej, "hj_evasions": hj_ev,
+                        "searches": getattr(gate, "searches", 0), "searches_found": getattr(gate, "searches_found", 0),
+                        "searches_hj": getattr(gate, "searches_hj", 0),
+                        "search_index_sum": getattr(gate, "search_index_sum", 0),
+                        "search_ms": round(1000 * getattr(gate, "search_seconds", 0.0), 1),
+                        "corner_solves": getattr(gate, "corner_solves", 0),
+                        "corner_s": round(getattr(gate, "corner_seconds", 0.0), 2),
+                        "step_ms_mean": round(float(np.mean(step_ms)), 2) if step_ms else 0.0,
+                        "step_ms_p95": round(float(np.percentile(step_ms, 95)), 2) if step_ms else 0.0,
+                        "step_ms_max": round(float(np.max(step_ms)), 2) if step_ms else 0.0,
+                        "deadline_misses": int(np.sum(np.array(step_ms) > 1000 * profile.ctrl_dt))})
+            for k in ("backup_rejections", "hj_evasions", "searches", "searches_found", "searches_hj",
+                      "search_index_sum", "deadline_misses"):
+                agg[k] += rec[k] or 0
+            agg["search_ms"] += rec["search_ms"]
+            step_all += step_ms
+        if ep.status == "reached" and straight > 0:
+            path_ratio.append(path / straight)
+        EPISODES.append(rec)
         c[ep.status] += 1
         steps += len(ep.cmds)
         if ep.status == "reached":
@@ -115,7 +183,17 @@ def run(profile, world, v0, kw, unknown="occupied", nominal="mppi", kind="backup
             "median_time_to_goal_s": round(float(np.median(t_goal)) if t_goal else 0.0, 1),
             "primitives_last": round(float(np.mean(prims)) if prims else 0.0, 1),
             "ms_per_step": round(1000 * (time.perf_counter() - t0) / max(steps, 1), 1),
-            "corner_solves": solves, "corner_ms_per_step": round(1000 * corner_s / max(steps, 1), 1)}
+            "corner_solves": solves, "corner_ms_per_step": round(1000 * corner_s / max(steps, 1), 1),
+            "backup_rejection_rate": round(agg["backup_rejections"] / max(steps, 1), 3),
+            "hj_evasion_rate": round(agg["hj_evasions"] / max(steps, 1), 3),
+            "search_ms_per_step": round(agg["search_ms"] / max(steps, 1), 2),
+            "witness_hj_share": round(agg["searches_hj"] / max(agg["searches_found"], 1), 3),
+            "witness_index_mean": round(agg["search_index_sum"] / max(agg["searches_found"], 1), 2),
+            "witness_found_share": round(agg["searches_found"] / max(agg["searches"], 1), 3),
+            "path_ratio_median": round(float(np.median(path_ratio)) if path_ratio else 0.0, 3),
+            "step_ms_p95": round(float(np.percentile(step_all, 95)) if step_all else 0.0, 1),
+            "step_ms_max": round(float(np.max(step_all)) if step_all else 0.0, 1),
+            "deadline_miss_share": round(agg["deadline_misses"] / max(len(step_all), 1), 4)}
 
 
 def main():
@@ -123,8 +201,11 @@ def main():
     ap.add_argument("--v0", nargs="+", default=None, help="V0 files (default: the profile's base_value)")
     ap.add_argument("--placements", nargs="+", default=["inward"], choices=list(PLACEMENTS))
     ap.add_argument("--robot", default="burger", help="robot profile (burger, qbot)")
-    ap.add_argument("--worlds", nargs="+", default=None, choices=["hj", "pillar", "occluded", *QBOT_WORLDS],
-                    help="default: hj pillar occluded (Burger), arena occluded6 (QBot)")
+    ap.add_argument("--worlds", nargs="+", default=None,
+                    help="hj, pillar, occluded (Burger), arena, occluded6 (QBot), gaps (a wall with one gap, every width "
+                         "in GAPS) or one gap<width>; default: hj pillar occluded (Burger), arena occluded6 (QBot)")
+    ap.add_argument("--episodes-out", default=None, help="also write one row per episode (CSV), for paired comparisons")
+    ap.add_argument("--label", default="", help="label of this run in --episodes-out (e.g. corners off / delayed)")
     ap.add_argument("--t-max", type=float, default=100.0, help="time limit of an episode (s)")
     ap.add_argument("--goal-radius", type=float, default=None,
                     help="reached within this distance (m); default 0.1 (Burger), 0.2 (QBot, 0.57 m wide)")
@@ -150,6 +231,11 @@ def main():
     all_worlds = worlds(base)
     if args.worlds is None:
         args.worlds = list(QBOT_WORLDS) if base.dynamics == "dubins4d" else ["hj", "pillar", "occluded"]
+    if "gaps" in args.worlds:
+        i = args.worlds.index("gaps")
+        args.worlds[i:i + 1] = [f"gap{w:g}" for w in GAPS[base.dynamics]]
+    for name, w in all_worlds.items():
+        w["name"] = name
     if args.goal_radius is None:
         args.goal_radius = 0.2 if base.dynamics == "dubins4d" else 0.1
     missing = [w for w in args.worlds if w not in all_worlds]
@@ -172,7 +258,7 @@ def main():
                            if args.corners else "") if v0 is not None else "",
                "margin_m": "" if args.margin is None or kind not in ("hj", "hj_backup") else args.margin,
                **run(profile, all_worlds[wname], v0, PLACEMENTS.get(placement, {}), unknown or "occupied", nominal,
-                     kind, t_max=args.t_max, goal_radius=args.goal_radius, corner_kw=dict(corners=True, corner_theta=args.corner_theta, corner_mode=args.corner_mode,
+                     kind, t_max=args.t_max, goal_radius=args.goal_radius, label=args.label, corner_kw=dict(corners=True, corner_theta=args.corner_theta, corner_mode=args.corner_mode,
                                     corner_frontier=args.corner_frontier)
                      if args.corners else dict(corners=False), margin=args.margin if kind in ("hj", "hj_backup") else None)}
         rows.append(row)
@@ -184,6 +270,13 @@ def main():
         writer.writeheader()
         writer.writerows(rows)
     print(f"wrote {out}")
+    if args.episodes_out:
+        with open(args.episodes_out, "w", newline="") as f:
+            keys = list(dict.fromkeys(k for r in EPISODES for k in r))
+            writer = csv.DictWriter(f, fieldnames=keys)
+            writer.writeheader()
+            writer.writerows(EPISODES)
+        print(f"wrote {args.episodes_out}")
 
 
 if __name__ == "__main__":

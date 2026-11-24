@@ -310,3 +310,21 @@ def test_corner_windows_arrive_later_when_asynchronous(v0, mode):
     assert len(got) == 2 and gate.corner_solves == 2               # one solve each, picked up when ready
     if mode == "delayed":
         assert periods * gate.profile.ctrl_dt >= gate.corner_seconds - 1e-9
+
+
+def test_corner_window_reuse_ignores_splits_and_far_ends():
+    """A solved corner window is kept when its faces, clipped to the window, stay within the tolerance: a face that
+    splits in two, an end that moves outside the window, or a jitter below the tolerance; not when a face moves"""
+    from nav_core.safety.scene import _clip_segments, _segments_close
+    floor = np.array([[[0.0, 0.0], [5.0, 0.0]], [[0.0, 0.0], [0.0, 5.0]]])
+    clip = lambda segs: _clip_segments(segs, (0.0, 0.0), 2.0)
+    assert np.allclose(clip(floor)[0], [[0.0, 0.0], [2.0, 0.0]])          # clipped to the window
+    split = np.array([[[0.0, 0.0], [1.0, 0.0]], [[1.0, 0.0], [5.0, 0.0]], [[0.0, 0.0], [0.0, 5.0]]])
+    longer = np.array([[[0.0, 0.0], [9.0, 0.0]], [[0.0, 0.0], [0.0, 5.0]]])
+    jitter = floor + np.array([0.0, 0.04])
+    moved = floor + np.array([0.0, 0.3])
+    assert _segments_close(clip(floor), clip(split), 0.06)
+    assert _segments_close(clip(floor), clip(longer), 0.06)
+    assert _segments_close(clip(floor), clip(jitter), 0.06)
+    assert not _segments_close(clip(floor), clip(moved), 0.06)
+    assert len(_clip_segments(np.array([[[5.0, 5.0], [6.0, 6.0]]]), (0.0, 0.0), 2.0)) == 0

@@ -211,6 +211,10 @@ Burger 的位姿在轮轴中心，底盘后角离轴心 0.1237 m，`footprint_ra
 - **`hj` 加修正后 hj 场景又有 2 次碰撞**（半径 0.105 时是 0）。`hj_failures.py --worlds hj --corners --corner-theta 30 --verbose` 把两次都判为 leaking corner，但漏得很少：进入真实 BRT 的那个周期，修正后的 U 只有 +0.121 和 +0.052（模型单位，即 5–12 mm），下一个周期就变成负的，经典 `hj` 再躲已经来不及。这个量级和拐角窗口的网格（1 cm）、建图栅格（2 cm）同级；半径变大后通道更窄，贴着拐角走的情况更多，原来的 0 次是踩着边过的。
 - **加 margin 不是免费的**（`filter_batch.py --filters hj --worlds hj pillar occluded --corners --corner-mode delayed --margin 0.02`）：hj 场景 24 / 0 / 2，柱子 26 / 0 / 2，遮挡 12 / **1** / 10。margin 让 `hj` 更早进入逃逸模式（介入率 0.41–0.46），在遮挡场景的拐角附近被困住、超时变多，还多了 1 次碰撞（margin 1 cm 时 hj 场景不撞了，遮挡场景撞 2 次）。所以 `hj` 的默认 margin 仍是 0：经典 `hj` 对这种毫米级的数值误差没有余量，也没有安全的恢复，这正是 `hj_backup` 用 backup 兜底的理由。
 
+### 重算规则（2026-11-23）
+
+默认不修 frontier 拐角时，frontier 面不再进窗口（求解和复用检查都不看它们，它们仍在并集里）；复用检查改成比较裁剪到窗口里的几何（Hausdorff 距离），容差默认 1.5 个地图格子（Burger 3 cm）。3D 的窗口求解次数少了 2–4.6 倍；批量结果和讨论见 [16](16_safety_conditions.md) §16.5。
+
 ## 13.8 计划和进度
 
 | # | 内容 | 状态 |

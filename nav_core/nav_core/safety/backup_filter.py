@@ -39,11 +39,26 @@ class BackupFilter(SceneFilter):
         self.plan = None                               # committed witness, padded to K steps with its loiter turn
         self.loiter = 0.0                              # (Dubins 4D: padded with "stay stopped", a = w = 0)
         self.started = False
+        # search statistics: witness searches, their time, how many found one, how many with the HJ candidate (the
+        # first one when use_hj), and the sum of the indices of the witnesses found (priority order)
+        self.searches = self.searches_found = self.searches_hj = self.search_index_sum = 0
+        self.search_seconds = 0.0
 
     def _find(self, z, model):
+        import time
+        info = {}
+        start = time.perf_counter()
         if self.four:
-            return find_witness_4d(z, model, self.plant_model, self.sub_dt, self.use_hj)
-        return find_witness(z, model, self.sub_dt, self.use_hj)
+            found = find_witness_4d(z, model, self.plant_model, self.sub_dt, self.use_hj, info)
+        else:
+            found = find_witness(z, model, self.sub_dt, self.use_hj, info)
+        self.search_seconds += time.perf_counter() - start
+        self.searches += 1
+        if info.get("index") is not None:
+            self.searches_found += 1
+            self.search_index_sum += info["index"]
+            self.searches_hj += int(self.use_hj and info["index"] == 0)
+        return found
 
     def _commit(self, found) -> None:
         plan, loiter = found

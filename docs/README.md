@@ -23,6 +23,7 @@
 | [13 在线修 leaking corner](13_online_local_update.md) | 稳态 local update（只用收敛的 V₀，不要时间历史）：为什么改计划、收敛证据、插值风险、进度 |
 | [14 ROS 2 上机测试指南](14_ros2_desktop_test.md) | 给同事：desktop + Gazebo 上第一次实跑 `fastbrt_nav` 的步骤、测试项和预期、要交回的数据 |
 | [15 QBot（Dubins 4D）](15_qbot_dubins4d.md) | 能刹车的车：单位、速度上下限（动力学限幅）、4D 离线 V₀、刹停的后路、新地图、结果 |
+| [16 安全条件](16_safety_conditions.md) | **讨论稿**：LiDAR 量程、最大速度、计算延迟之间要满足的两个条件，四个可调的旋钮；4D 拐角修正做了什么、为什么还太慢 |
 
 只想快速上手：读 [01](01_overview.md) 和 [07](07_mppi_walkthrough.md) 就够。想知道现在做到哪了：读 [11 路线图](11_roadmap.md)。
 
