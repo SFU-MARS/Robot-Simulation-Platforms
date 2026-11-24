@@ -2,10 +2,12 @@
 # git: they are assets of a GitHub release of this repository.  nav_core/scripts/fetch_v0.py downloads them into
 # `folder`; nav_core.safety checks the sha256 of a listed file when it loads it.  A new V0 gets a new tag.
 repository: SFU-MARS/Robot-Simulation-Platforms
-tag: v0-2026-11-22
+tag: v0-2026-11-23                       # v0-2026-11-22 had the four 3D files only
 folder: fast-brt/results/v0
 files:                                   # name: sha256
   v0_dubins_3d_linear_alpha20_low.npz: aa634c3c7175134e67b22f41e5f75e6a0410ec8bf4aa10cb231bbcc92b197c39       # default (burger.yaml)
   v0_dubins_3d_linear_alpha20_medium.npz: 71e5fdc16fbf4825438dc7caa4e97fd968b842d5913e88044794b1076baaab00
   v0_dubins_3d_quadratic_alpha20_low.npz: 3da934fd7b77bc12ed03f33c29d4101de5b61a7125d93b65f1477a4896ce115b
   v0_dubins_3d_quadratic_alpha20_medium.npz: b863de14d0ff3d4b47a16bfd02db479140588b20901cd15af1b7093f669cd820
+  v0_dubins_4d_linear_alpha20_low.npz: 8f93220f3faa674f132bee3b63d374a6c8c2f17e05e1b47eff161e06f6b1e969       # QBot (configs/v0_dubins_4d.json), 235 MB
+  v0_dubins_4d_coarse_linear_alpha20_low.npz: bb16ab716ec2b34e74477934c9d469e08b710c443f61378494ce4918219ba607   # 97 x 97 (configs/v0_dubins_4d_coarse.json), checks only
