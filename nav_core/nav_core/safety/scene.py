@@ -226,19 +226,21 @@ class Scene:
     def value(self, states: np.ndarray) -> np.ndarray:
         """HJ value of the union of the primitives at states (N, 3), lowered at the corrected corners; inf without
         primitives."""
-        out = self.v0.value(self._v0_states(states), self.faces)
+        q = self._v0_states(states)
+        out = self.v0.value(q, self.faces)
         for w in self.corners:
-            out = np.minimum(out, w.values(states))
+            out = np.minimum(out, w.values(q))
         return out
 
     def hj_margin(self, states: np.ndarray) -> np.ndarray:
         """Distance margin of the union (model length units, ``PrimitiveV0.margin``): every state within it (same
         heading) is outside the BRT of every primitive; inf without primitives. Lowered at the corrected corners
         (their values are in the linear encoding)."""
-        out = self.v0.margin(self._v0_states(states), self.faces)
+        q = self._v0_states(states)
+        out = self.v0.margin(q, self.faces)
         lipschitz = max(1.0, float(np.sqrt(self.v0.alpha)))
         for w in self.corners:
-            out = np.minimum(out, w.values(states) / lipschitz)
+            out = np.minimum(out, w.values(q) / lipschitz)
         return out
 
     def hj_control(self, states: np.ndarray) -> np.ndarray:
@@ -249,7 +251,19 @@ class Scene:
         if self.four:
             if not len(self.faces):
                 return np.zeros((len(states), 2))
-            return self.v0.query(self._v0_states(states), self.faces).control
+            q = self._v0_states(states)
+            res = self.v0.query(q, self.faces)
+            control, best = res.control.copy(), res.value.copy()
+            p = self.v0.dynamics_params
+            a_max, w_max = float(p.get("aMax", 1.0)), float(p.get("wMax", 1.0))
+            for w in self.corners:                    # a corrected corner gives the value: its (a, w), uMode max
+                v = w.values(q)
+                lower = v < best
+                if lower.any():
+                    control[lower, 0] = np.where(w.dv(q[lower]) < 0, -a_max, a_max)
+                    control[lower, 1] = np.where(w.dtheta(q[lower]) < 0, -w_max, w_max)
+                    best[lower] = v[lower]
+            return control
         if not len(self.faces):
             return np.zeros(len(states))
         q = self.v0.query(states, self.faces)
@@ -270,8 +284,9 @@ class SceneFilter:
     V0: ``v0`` if given, else the file in the environment variable ROBOT_SIM_V0, else the profile's
     ``base_value``; relative paths start at the folder that holds the profile's robots/ (``profile.root``).
 
-    ``corners=True`` corrects the leaking corners near the robot (fast_brt.corner, docs/13): the stationary local
-    update on a window around each corner (spacing ``corner_dx``, model units; ``corner_theta`` headings, default 30,
+    ``corners=True`` corrects the leaking corners near the robot (fast_brt.corner, docs/13; Dubins 4D: docs/15): the
+    stationary local update on a window around each corner (spacing ``corner_dx``, model units; ``corner_theta``
+    headings, default 30,
     None: as many as V0), solved when the corner appears or its
     faces move by more than ``corner_reuse``; the scene's value, margin and HJ control use the corrected values.
     Only corners between obstacle faces by default; ``corner_frontier=True`` also corrects corners with a frontier
@@ -293,15 +308,13 @@ class SceneFilter:
     def __init__(self, profile, v0=None, unknown: str = "occupied", primitives: str = "faces",
                  placement: str = "inward", cut: bool = False, horizon: float = 2.0, sub_dt: "float | None" = None,
                  clearance: "float | None" = None, h_max: "float | None" = None, corners: bool = False,
-                 corner_dx: float = 0.1, corner_reuse: float = 0.2, corner_frontier: bool = False,
+                 corner_dx: "float | None" = None, corner_reuse: "float | None" = None, corner_frontier: bool = False,
                  corner_theta: "int | None" = 30, corner_warm: bool = True, corner_mode: str = "sync",
                  rect_margin: "bool | None" = None):
         profile.require_ready()
         if profile.dynamics not in ("dubins3d", "dubins4d"):
             raise NotImplementedError(f"{type(self).__name__} for dynamics {profile.dynamics!r}")
         self.four = profile.dynamics == "dubins4d"
-        if self.four and corners:
-            raise NotImplementedError("the corner correction (fast_brt.corner) is for Dubins 3D only so far")
         if sub_dt is None:
             sub_dt = 0.025 if self.four else 0.05       # model time: Burger 0.05 s, QBot 0.05 s (unit 2 s)
         # the modelled obstacle of the backup filter's witnesses: the complement of the region, and the primitive
@@ -353,6 +366,10 @@ class SceneFilter:
         self.model = None                              # last scene, for plots
         # corner correction (docs/13): windows near the robot, a solved window reused while its faces stay within
         # corner_reuse (model units, 0.2 = 2 cm on the Burger, below the clearance) of the ones it was solved for
+        # corner_dx None: fast_brt.corner.window_defaults (0.1 for 3D, 0.05 for 4D); corner_reuse None: 0.2 (3D, 2 cm
+        # on the Burger) or 0.02 (4D, 3.2 cm on the QBot)
+        if corner_reuse is None:
+            corner_reuse = 0.02 if self.four else 0.2
         self.corners, self.corner_dx, self.corner_reuse = corners, corner_dx, corner_reuse
         self.corner_frontier, self.corner_theta, self.corner_warm = corner_frontier, corner_theta, corner_warm
         self.corner_warm_solves = 0
@@ -446,7 +463,7 @@ class SceneFilter:
             if xy is not None and np.max(np.abs(center - xy)) > self.v0.reach + spec.grid.half:
                 continue
             mine = segments[list(spec.faces)]
-            match = (spec.grid.half - 1.2) / 2.0
+            match = (spec.grid.half - corner.window_defaults(self.v0)["edge"]) / 2.0
             free = [sl for sl in self._slots if all(sl is not t for t in slots)]
             slot = min(free, key=lambda sl: float(np.max(np.abs(sl["center"] - center))), default=None)
             if slot is None or np.max(np.abs(slot["center"] - center)) > match:

@@ -63,9 +63,8 @@ def test_hj_rates_4d_keep_the_nominal_or_evade():
 
 def test_qbot_filter_settings(v0_4d, v0):
     p = load_profile("qbot")
-    assert not make_filter(p, "hj", v0=v0_4d).corners              # no 4D corner correction yet
-    with pytest.raises(NotImplementedError, match="Dubins 3D"):
-        make_filter(p, "hj", v0=v0_4d, corners=True)
+    assert not make_filter(p, "hj", v0=v0_4d).corners              # 4D corner correction: on request (slow)
+    assert make_filter(p, "hj", v0=v0_4d, corners=True).corners
     with pytest.raises(ValueError, match="Dubins 4D"):
         make_filter(p, "backup", v0=v0)                             # the Burger's 3D V0
     f = make_filter(p, "backup", v0=v0_4d)

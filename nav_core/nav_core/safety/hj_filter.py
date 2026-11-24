@@ -3,7 +3,8 @@ HJ filters (Dubins 3D and 4D) on the primitive values, as ``nav_core.sim`` safet
 
 Dubins 4D (QBot): the nominal control is (a, w), the HJ evasion is the optimal (a, w) of the nearest primitive,
 a = a_max sign(dV/dv) and w = w_max sign(dV/dtheta), and the predicted sub-steps are exact (speed limits included);
-no corner correction yet (fast_brt.corner is 3D), so ``corners`` defaults to on for Dubins 3D only.
+the corner correction works on 4D windows too (``corners=True``), but a window takes 1-6 s in numpy instead of
+0.1-0.2 s (docs/15), so ``corners`` defaults to on for Dubins 3D only.
 
 Both compare the distance margin of the union of the primitives (``Scene.hj_margin``: each face's value in the
 linear encoding divided by its Lipschitz constant sqrt(alpha), so a state with margin d is at least d, at the
@@ -98,8 +99,8 @@ class HJFilter(SceneFilter):
 
     def __init__(self, profile, v0=None, margin: float = 0.0, robust: bool = False, corners: "bool | None" = None,
                  **kw):
-        if corners is None:                        # on for Dubins 3D; the 4D correction does not exist yet
-            corners = profile.dynamics == "dubins3d"
+        if corners is None:                        # on for Dubins 3D; 4D works (corners=True) but takes 1-6 s per window
+            corners = profile.dynamics == "dubins3d"   # in numpy, too slow for the QBot online (docs/15)
         super().__init__(profile, v0, corners=corners, **kw)
         self.margin, self.robust = margin, robust
         self.margin_model = model_margin(self, margin, robust)
