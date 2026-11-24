@@ -41,7 +41,7 @@ Each control period:
 | Robot | Dynamics | Simulator | Status |
 | --- | --- | --- | --- |
 | TurtleBot3 Burger | Dubins 3D (x, y, θ), constant speed | Gazebo | profile ready |
-| Quanser QBot | Dubins 4D (x, y, θ, v) | Gazebo | placeholder |
+| Quanser QBot | Dubins 4D (x, y, θ, v), control (a, w) | ROS-free simulation (Gazebo later) | ready: 4D V0, the three filters; corner correction and ROS to do ([docs/15](docs/15_qbot_dubins4d.md)) |
 | Crazyflie | 6D | TBD | placeholder |
 
 Each robot has one profile, `robots/<name>.yaml`. It is the single source of the robot's parameters:
@@ -452,8 +452,9 @@ Decisions taken so far, with their reasons, so that they are not revisited by ac
   - publish RViz markers (grid, edges) and log trajectories.
 - [ ] Closed-loop Burger in Gazebo with the nominal controller only (no filter), to check units, speed limits and timing
 - [ ] Our own copy of the Burger SDF, with the LiDAR rate and range taken from the profile
-- [ ] Generic MPPI nominal controller on fast-brt dynamics (3D first, then 4D / 6D)
-- [ ] QBot: Gazebo model and profile values
+- [x] MPPI nominal controller for Dubins 3D and 4D (`MPPI.for_model`); 6D to do
+- [x] QBot profile values (`robots/qbot.yaml`, docs/15)
+- [ ] QBot: Gazebo model, ROS node for (a, w), 4D corner correction
 - [ ] Crazyflie: 6D model, simulator, sensor and profile values
 
 **Safety (fast-brt, branch `robot-sim`)**
@@ -466,7 +467,8 @@ Decisions taken so far, with their reasons, so that they are not revisited by ac
 - [ ] numpy point query without odp: length shift, inward placement, short-face extension, `V`, `∂V/∂θ`, `u*` (step 2)
 - [ ] Second-order local update (the kernel is first order now), or a hybrid correction
 - [ ] Online local update: a window that moves with the robot; incremental updates per obstacle id
-- [ ] Dubins 4D and 6D dynamics and their offline values
+- [x] Dubins 4D offline V0 (`fast-brt/configs/v0_dubins_4d.json`, release v0-2026-11-23)
+- [ ] 6D dynamics and their offline values
 - [ ] A safety-filter interface that takes the nominal control as input, e.g. `SafetyFilter.step(x, u_nom, scene)` (in `nav_core/safety`)
 
 ## Open questions

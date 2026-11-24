@@ -3,14 +3,17 @@ ROS-free closed loop, the stand-in for one Gazebo run.
 
 Every control period (``profile.ctrl_dt``): scan the true world at the
 current pose, update the accumulated map, ask the nominal controller for a
-turn rate, pass it through the optional safety hook, and hold it while the
-plant (a unicycle at the profile's constant speed, integrated exactly as
-circular arcs) moves.  The footprint is checked against the true world at
-every sub-step.
+control, pass it through the optional safety hook, and hold it while the
+plant moves: Dubins 3D (a unicycle at the profile's constant speed,
+integrated exactly as circular arcs; control w) or Dubins 4D
+(``profile.model``, exact, speed limits included; state (x, y, theta, v),
+control (a, w)).  The footprint is checked against the true world at every
+sub-step.
 
 The safety hook is where the FaST-BRT filter plugs in:
-``safety(x, w_nom, grid) -> w``, either one turn rate for the period or an
-array of zero-order-hold rates splitting it evenly.  A RuntimeError from the
+``safety(x, u_nom, grid) -> u``, either one control for the period or an
+array of zero-order-hold controls splitting it evenly (Dubins 3D: rates (k,);
+Dubins 4D: (2,) or (k, 2)).  A RuntimeError from the
 hook ends the run as "init_failed" (no certificate at the start) or
 "filter_error" (later); a NotImplementedError ends it as "unsupported".  Without a
 hook the robot runs the nominal controller only.
@@ -47,7 +50,7 @@ class Episode:
     status: str                              # reached | collision | timeout | init_failed | filter_error | unsupported
     t: float                                 # s, time at the end
     traj: np.ndarray                         # (N, 3) states at every sub-step
-    cmds: np.ndarray                         # (K, 2) (w_nom, w) per control period
+    cmds: np.ndarray                         # per control period: (K, 2) (w_nom, w); 4D (K, 4) (a_nom, w_nom, a, w)
     grid: OccupancyGrid                      # map at the end
     snapshots: List[tuple] = field(default_factory=list)    # (t, pose, copy of the map)
     error: str = ""                                          # message when the filter stopped the run
@@ -58,11 +61,21 @@ def run_episode(profile, world: World, x0, goal, nominal, safety: Optional[Calla
                 t_max: float = 60.0, goal_radius: float = 0.1, n_sub: int = 10,
                 snapshot_every: Optional[float] = None, noise_std: float = 0.0, seed: int = 0,
                 grid: Optional[OccupancyGrid] = None, tracker=None) -> Episode:
-    """``nominal.control(x, goal, grid) -> w``; ``noise_std``: Gaussian range noise (m);
+    """``nominal.control(x, goal, grid) -> u``; ``noise_std``: Gaussian range noise (m);
     ``grid``: the (empty) map to fill, default the profile's map; ``tracker``: an
-    ``ObstacleTracker`` fed with the obstacle layer every period (events in ``Episode.events``)."""
+    ``ObstacleTracker`` fed with the obstacle layer every period (events in ``Episode.events``).
+    Dubins 4D: ``x0`` is (x, y, theta, v), or (x, y, theta) standing still."""
     profile.require_ready()
-    v, dt = profile.phys["v"], profile.ctrl_dt
+    dt = profile.ctrl_dt
+    four = profile.dynamics == "dubins4d"
+    plant = profile.model
+    if four:
+        if len(x0) == 3:
+            x0 = (*x0, 0.0)
+        step = plant.step
+    else:
+        v = profile.phys["v"]
+        step = lambda x, u, h: unicycle_step(x, v, float(np.ravel(u)[0]), h)
     s = profile.sensor
     angles = np.arange(s.n_rays) * s.fov / s.n_rays
     rng = np.random.default_rng(seed)
@@ -84,22 +97,23 @@ def run_episode(profile, world: World, x0, goal, nominal, safety: Optional[Calla
             events += tracker.update(extract_obstacles(grid), t, grid.res)[1]
         if every is not None and k % every == 0:
             snaps.append((t, x.copy(), copy.deepcopy(grid)))
-        w_nom = nominal.control(x, goal, grid)
+        u_nom = nominal.control(x, goal, grid)
         try:
-            ws = w_nom if safety is None else safety(x, w_nom, grid)
+            us = u_nom if safety is None else safety(x, u_nom, grid)
         except NotImplementedError as e:             # a case the filter does not support (subclass of RuntimeError)
             status, error = "unsupported", str(e)
             break
         except RuntimeError as e:                    # no certificate at x0, or a filter failure later
             status, error = ("init_failed" if k == 0 else "filter_error"), str(e)
             break
-        ws = np.clip(np.atleast_1d(np.asarray(ws, float)), -profile.phys["w_max"], profile.phys["w_max"])
-        cmds.append((w_nom, float(ws[0])))
-        m = max(1, n_sub // len(ws))                 # plant sub-steps per held control
-        for w in ws:
+        us = np.asarray(us, float).reshape(-1, plant.n_control)
+        us = np.clip(us, plant.u_low, plant.u_high)
+        cmds.append((*np.ravel(u_nom), *us[0]) if four else (u_nom, float(us[0, 0])))
+        m = max(1, n_sub // len(us))                 # plant sub-steps per held control
+        for u in us:
             for _ in range(m):
-                h = dt / (len(ws) * m)
-                x = unicycle_step(x, v, w, h)
+                h = dt / (len(us) * m)
+                x = step(x, u, h)
                 t += h
                 traj.append(x.copy())
                 if world.distance(x[None, :2])[0] <= profile.footprint_radius:

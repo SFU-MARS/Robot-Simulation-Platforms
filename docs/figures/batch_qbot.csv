@@ -1,0 +1,17 @@
+robot,world,range_m,nominal,filter,v0,placement,corners,margin_m,episodes,reached,collision,timeout,init_failed,other,min_clearance_m,intervention_rate,median_time_to_goal_s,primitives_last,ms_per_step,corner_solves,corner_ms_per_step
+qbot,arena,2.0,pursuit,none,,,,,40,14,26,0,0,0,-0.006,0.0,6.5,0.0,4.1,0,0.0
+qbot,arena,2.0,mppi,none,,,,,40,34,0,6,0,0,0.0969,0.0,8.3,0.0,7.4,0,0.0
+qbot,occluded6,2.0,pursuit,none,,,,,35,8,27,0,0,0,-0.0046,0.0,5.5,0.0,4.7,0,0.0
+qbot,occluded6,2.0,mppi,none,,,,,35,35,0,0,0,0,0.0954,0.0,17.2,0.0,10.2,0,0.0
+qbot,arena,2.0,pursuit,"backup, unknown occupied","linear, low, alpha 20",inward,,,40,20,0,20,0,0,0.0416,0.518,6.0,17.3,10.0,0,0.0
+qbot,arena,2.0,mppi,"backup, unknown occupied","linear, low, alpha 20",inward,,,40,34,0,6,0,0,0.0969,0.0,7.9,18.0,15.6,0,0.0
+qbot,occluded6,2.0,pursuit,"backup, unknown occupied","linear, low, alpha 20",inward,,,35,11,0,24,0,0,0.0456,0.665,5.4,23.5,13.9,0,0.0
+qbot,occluded6,2.0,mppi,"backup, unknown occupied","linear, low, alpha 20",inward,,,35,35,0,0,0,0,0.0954,0.0,16.6,33.5,24.6,0,0.0
+qbot,arena,2.0,pursuit,"hj, unknown occupied","linear, low, alpha 20",inward,,,40,28,2,10,0,0,-0.0013,0.239,6.7,16.9,8.6,0,0.0
+qbot,arena,2.0,mppi,"hj, unknown occupied","linear, low, alpha 20",inward,,,40,34,0,6,0,0,0.049,0.019,9.1,17.8,11.8,0,0.0
+qbot,occluded6,2.0,pursuit,"hj, unknown occupied","linear, low, alpha 20",inward,,,35,14,2,19,0,0,-0.0021,0.362,5.7,24.1,11.8,0,0.0
+qbot,occluded6,2.0,mppi,"hj, unknown occupied","linear, low, alpha 20",inward,,,35,32,0,3,0,0,0.097,0.043,16.9,31.5,17.4,0,0.0
+qbot,arena,2.0,pursuit,"hj_backup, unknown occupied","linear, low, alpha 20",inward,,,40,14,0,26,0,0,0.0529,0.599,6.5,16.9,10.2,0,0.0
+qbot,arena,2.0,mppi,"hj_backup, unknown occupied","linear, low, alpha 20",inward,,,40,29,0,11,0,0,0.0813,0.099,8.1,17.4,15.1,0,0.0
+qbot,occluded6,2.0,pursuit,"hj_backup, unknown occupied","linear, low, alpha 20",inward,,,35,9,0,26,0,0,0.0427,0.659,5.9,23.0,14.2,0,0.0
+qbot,occluded6,2.0,mppi,"hj_backup, unknown occupied","linear, low, alpha 20",inward,,,35,24,0,11,0,0,0.0809,0.152,14.0,28.7,20.5,0,0.0

@@ -33,3 +33,15 @@ def fake_v0():
     value = np.broadcast_to(kernel(xs[:, None], xs[None, :], 20.0, "linear")[..., None], (n, n, nt))
     return PrimitiveV0(value.astype(np.float32), [-6.0, -6.0, -math.pi], [6.0, 6.0, math.pi], [n, n, nt], [2],
                        20.0, "linear", 2.0, "dubins_3d", {"v": 1, "wMax": 1, "uMode": "max"})
+
+
+@pytest.fixture(scope="session")
+def v0_4d():
+    """The QBot's 4D V0 (robots/qbot.yaml base_value, 235 MB); skipped without it like ``v0``"""
+    path = REPO_ROOT / load_profile("qbot").base_value
+    if not path.is_file():
+        message = f"no V0 file at {path} (python scripts/fetch_v0.py --all in nav_core)"
+        if os.environ.get("NAV_CORE_REQUIRE_V0"):
+            pytest.fail(message)
+        pytest.skip(message)
+    return load_v0(path)

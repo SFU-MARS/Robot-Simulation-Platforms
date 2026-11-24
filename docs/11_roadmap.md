@@ -122,11 +122,15 @@
 **动力学和机器人**
 
 - [X] Burger 的机器人半径改成真实值 0.124 m（位姿在轮轴中心，底盘后角离轴心 0.1237 m；原来 0.105），全部批量和 ROS 测试的预期重跑（2026-11-23）：`backup` / `hj_backup` 仍然 0 碰撞，地图通道够宽（hj 场景最窄 0.40 m），详见 [13](13_online_local_update.md) §13.7 最后一节；
-- [ ] Dubins4D（QBot，Quanser QBot Platform：六边形底盘 Ø570 mm，LiDAR 在轴心前 0.221 m；a、ω ∈ [−0.5, 0.5]，v ∈ [−0.2, 0.8] m/s，来自 hj_nav 论文）：离线 4D V₀（mars-14）→ profile、仿真、4D 的 pursuit / MPPI、`hj` 的 (a, ω)、后路改成"刹停" → 按 QBot 尺度的新地图 → 4D 拐角修正。进展（2026-11-23）：
+- [~] Dubins4D（QBot，Quanser QBot Platform：六边形底盘 Ø570 mm，LiDAR 在轴心前 0.221 m；a、ω ∈ [−0.5, 0.5]，v ∈ [−0.2, 0.8] m/s，来自 hj_nav 论文）：离线 4D V₀（mars-14）→ profile、仿真、4D 的 pursuit / MPPI、`hj` 的 (a, ω)、后路改成"刹停" → 按 QBot 尺度的新地图 → 4D 拐角修正。进展（2026-11-23）：
   - **速度上下限用动力学限幅**（HJ_local_update 的 `dubins_4d`：v 到界后不能再往外加速，v 轴正好是 [v_min, v_max]），不用 hj_nav 的"速度带进 avoid set、乘 λ = 10⁴"。`fast-brt/experiments/speed_limits_4d.py` 在墙和线段上比了三种做法（限幅、限幅且 v 轴加宽、λ 速度带），值彼此相差 < 1e-4，限幅最简单，V 一直是长度单位；
   - 4D 的向量化一阶步进 `fast_brt.corner.Stepper4D` 和 `value_change_numpy`（`dubins_4d`）逐位相同；
   - 同一实验发现一阶格式在粗网格上对少数状态偏乐观（主要在 v = v_max、冲过线段端点的逃法），主要随 x、y 的网格收敛（dx 减半：误判比例 0.10% → 0.03%），θ、v 加密作用不大；α 越大误差越大（α 5 / 10 / 20 / 40：误判 0.03 / 0.00 / 0.10 / 0.23%），差别不大，**4D 也用 α = 20**（用户决定）；
   - **4D V₀ 的配置** `fast-brt/configs/v0_dubins_4d.json`：QBot 单位（时间 1/ω_max = 2 s，长度 v_max/ω_max = 1.6 m；ω_max = 1、v_max = 1、v_min = −0.25、a_max = 1.25），T = 1.6（numpy 实测：t = 1.6 时变化 < 1e-5，1.77 以后不再变；3D 是 2），网格 385 × 385 × 11 × 36，x、y ∈ [−4.8, 4.8]（3T，使 l_ref ≥ 2vT），dx = 0.025（4 cm），l_min = 0.224（36 cm），约 5900 万点、235 MB；另有 97 × 97 的 `v0_dubins_4d_coarse.json` 用来和 odp 对比、在本地开发。`export-v0 --solver numpy`（fast_brt.corner 的步进，low，小网格）不用 HeteroCL 也能导出；coarse 版本地 15 s：全速冲向墙在刹车距离（0.4 = 0.64 m）以内 V < 0，以外 V > 0，u* = 刹车 + 转向；
+  - **离线 V₀ 完成**（2026-11-23）：mars-14 解 143 s，release `v0-2026-11-23`；odp 和 numpy（小配置）逐点一致到 float32 舍入；正对墙全速时能躲开的最近距离 0.636 m（直线刹车 0.640 m）；
+  - **在线（无 ROS）完成**（2026-11-23，[15](15_qbot_dubins4d.md)）：`robots/qbot.yaml`、精确的 4D 车模型、4D 的 pursuit / MPPI、三种 filter（后路 = 刹停）、`rect_margin`（4D 的后路只用可行区域）、新地图 `qbot_arena` / `qbot_occluded`、`filter_batch.py --robot qbot`；
+  - **批量**（[15](15_qbot_dubins4d.md) §15.6，`docs/figures/batch_qbot.csv`）：`backup`、`hj_backup` 在两张地图、两种 nominal 下都 0 碰撞；`hj` 跟着 pursuit 撞 2 + 2 次（凹角漏）；MPPI 本身不撞，filter 几乎不介入；pursuit 加 filter 常常停住（超时）；
+  - 待做：4D 拐角修正（`Stepper4D` 已有）、ROS 节点的 (a, ω) 和 QBot 的 Gazebo 模型；
 - [ ] 6D 无人机：确认模型（HJ_local_update 的 `quadrotor_6d` 是竖直平面四旋翼，不是水平面导航）、传感器、仿真器；
 - [ ] Dubins3D 的参数扫描（是否改用 `Dubins3D2Ctrl`）。
 

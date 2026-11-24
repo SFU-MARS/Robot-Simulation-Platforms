@@ -38,8 +38,24 @@ from nav_core.sim import Box, World, run_episode
 PLACEMENTS = {"inward": dict(placement="inward", cut=False), "centered+cut": dict(placement="centered", cut=True)}
 
 
+QBOT_WORLDS = ("arena", "occluded6")
+
+
 def worlds(profile):
     root = ROBOTS_DIR.parent
+    if profile.dynamics == "dubins4d":                 # the QBot's worlds (scripts/make_qbot_worlds.py)
+        arena = World.from_sdf(root / "turtlebot3/turtlebot3_controls/worlds/qbot_arena.world",
+                               plane_z=profile.sensor.height)
+        occ6 = World.from_sdf(root / "turtlebot3/turtlebot3_controls/worlds/qbot_occluded.world",
+                              plane_z=profile.sensor.height)
+        return {
+            # goals: the corners but the closed north-west one, inside the L's concave corner, along the north wall
+            "arena": {"w": arena, "xy": (-1.4, 1.4), "goals": [(1.3, 1.3), (1.3, -1.3), (-1.3, -1.3), (0.0, 0.3),
+                                                               (-0.4, 1.2)], "n": 8, "grid": None},
+            "occluded6": {"w": occ6, "xy": (-2.6, 2.6), "goals": [(2.3, 0.0), (-2.4, -0.2), (0.0, -2.2), (2.3, 2.4),
+                                                                  (-1.0, 2.3), (-2.5, 2.3)], "n": 6,
+                          "grid": occ6.bounds()},
+        }
     hj = World.from_sdf(root / profile.world, plane_z=profile.sensor.height)
     occ = World.from_sdf(root / "turtlebot3/turtlebot3_controls/worlds/occluded_4x4.world",
                          plane_z=profile.sensor.height)
@@ -66,7 +82,7 @@ def cases(world, profile, seed=1):
 
 
 def run(profile, world, v0, kw, unknown="occupied", nominal="mppi", kind="backup", t_max=100.0, corner_kw=None,
-        margin=None):
+        margin=None, goal_radius=0.1):
     """One batch with filter ``kind`` (backup | hj | hj_backup | none); v0 and kw (placement) are ignored without a filter."""
     c, clr, interv, prims, t_goal, steps, t0 = collections.Counter(), np.inf, [], [], [], 0, time.perf_counter()
     solves, corner_s = 0, 0.0
@@ -77,7 +93,8 @@ def run(profile, world, v0, kw, unknown="occupied", nominal="mppi", kind="backup
                            **(dict(kw, **(corner_kw or {}), **extra) if kind != "none" else {}))
         grid = None if world["grid"] is None else OccupancyGrid(*world["grid"], profile.map.resolution)
         nom = make_nominal(profile, nominal, **({"seed": i} if nominal == "mppi" else {}))
-        ep = run_episode(profile, world["w"], x0, goal, nom, safety=gate, t_max=t_max, seed=i, grid=grid)
+        ep = run_episode(profile, world["w"], x0, goal, nom, safety=gate, t_max=t_max, seed=i, grid=grid,
+                         goal_radius=goal_radius)
         c[ep.status] += 1
         steps += len(ep.cmds)
         if ep.status == "reached":
@@ -105,7 +122,12 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--v0", nargs="+", default=None, help="V0 files (default: the profile's base_value)")
     ap.add_argument("--placements", nargs="+", default=["inward"], choices=list(PLACEMENTS))
-    ap.add_argument("--worlds", nargs="+", default=["hj", "pillar", "occluded"], choices=["hj", "pillar", "occluded"])
+    ap.add_argument("--robot", default="burger", help="robot profile (burger, qbot)")
+    ap.add_argument("--worlds", nargs="+", default=None, choices=["hj", "pillar", "occluded", *QBOT_WORLDS],
+                    help="default: hj pillar occluded (Burger), arena occluded6 (QBot)")
+    ap.add_argument("--t-max", type=float, default=100.0, help="time limit of an episode (s)")
+    ap.add_argument("--goal-radius", type=float, default=None,
+                    help="reached within this distance (m); default 0.1 (Burger), 0.2 (QBot, 0.57 m wide)")
     ap.add_argument("--unknowns", nargs="+", default=["occupied"], choices=["occupied", "free"])
     ap.add_argument("--nominals", nargs="+", default=["mppi"], choices=["mppi", "pursuit"])
     ap.add_argument("--filters", nargs="+", default=["backup"], choices=["backup", "hj", "hj_backup", "none"])
@@ -124,8 +146,15 @@ def main():
     ap.add_argument("--out", default=str(Path(__file__).resolve().parents[1] / "outputs" / "filter_batch.csv"))
     args = ap.parse_args()
 
-    base = load_profile("burger")
+    base = load_profile(args.robot)
     all_worlds = worlds(base)
+    if args.worlds is None:
+        args.worlds = list(QBOT_WORLDS) if base.dynamics == "dubins4d" else ["hj", "pillar", "occluded"]
+    if args.goal_radius is None:
+        args.goal_radius = 0.2 if base.dynamics == "dubins4d" else 0.1
+    missing = [w for w in args.worlds if w not in all_worlds]
+    if missing:
+        raise SystemExit(f"worlds {missing} are not worlds of {args.robot}: {list(all_worlds)}")
     v0s = [load_v0(path) for path in args.v0 or [base.base_value]]
     # without the filter, the V0, placement and mode do not matter: one batch per world, nominal and range
     combos = [(w, r, n, "none", None, None, None) for w in args.worlds for r in args.ranges for n in args.nominals
@@ -135,7 +164,7 @@ def main():
     rows = []
     for wname, lidar, nominal, kind, v0, placement, unknown in combos:
         profile = base if lidar is None else dataclasses.replace(base, sensor=dataclasses.replace(base.sensor, range=lidar))
-        row = {"world": wname, "range_m": profile.sensor.range, "nominal": nominal,
+        row = {"robot": base.name, "world": wname, "range_m": profile.sensor.range, "nominal": nominal,
                "filter": "none" if v0 is None else f"{kind}, unknown {unknown}",
                "v0": "" if v0 is None else f"{v0.encoding}, {v0.meta.get('accuracy', '?')}, alpha {v0.alpha:g}",
                "placement": "" if v0 is None else placement,
@@ -143,7 +172,7 @@ def main():
                            if args.corners else "") if v0 is not None else "",
                "margin_m": "" if args.margin is None or kind not in ("hj", "hj_backup") else args.margin,
                **run(profile, all_worlds[wname], v0, PLACEMENTS.get(placement, {}), unknown or "occupied", nominal,
-                     kind, corner_kw=dict(corners=True, corner_theta=args.corner_theta, corner_mode=args.corner_mode,
+                     kind, t_max=args.t_max, goal_radius=args.goal_radius, corner_kw=dict(corners=True, corner_theta=args.corner_theta, corner_mode=args.corner_mode,
                                     corner_frontier=args.corner_frontier)
                      if args.corners else dict(corners=False), margin=args.margin if kind in ("hj", "hj_backup") else None)}
         rows.append(row)

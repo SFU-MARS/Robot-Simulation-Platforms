@@ -87,7 +87,7 @@
 Robot-Simulation-Platforms/
   robots/                       # 每个机器人一个 profile
     burger.yaml                 #   TurtleBot3 Burger，dubins3d，ready
-    qbot.yaml                   #   Quanser QBot，dubins4d，placeholder
+    qbot.yaml                   #   Quanser QBot Platform，dubins4d（见 15）
     crazyflie.yaml              #   Crazyflie，6D，placeholder
   nav_core/                     # 不依赖 ROS 的导航核心（可 pip 安装）
     nav_core/
@@ -116,7 +116,7 @@ Robot-Simulation-Platforms/
 | 机器人            | Dynamics                      | 仿真器 | 状态                      |
 | ----------------- | ----------------------------- | ------ | ------------------------- |
 | TurtleBot3 Burger | Dubins 3D`(x, y, θ)`，恒速 | Gazebo | profile ready，全流程跑通 |
-| Quanser QBot      | Dubins 4D`(x, y, θ, v)`    | Gazebo | placeholder，等 dynamics  |
+| Quanser QBot      | Dubins 4D`(x, y, θ, v)`    | 仿真（无 ROS） | ready：离线 V₀、三种 filter；拐角修正和 ROS 待做（[15](15_qbot_dubins4d.md)） |
 | Crazyflie         | 6D                            | 待定   | placeholder，等 dynamics  |
 
 Dynamics 由师妹在 FaST-BRT 侧提供。本 repo 只负责把 profile 里的参数接上去。
@@ -138,4 +138,4 @@ Burger 只用于**慢速的简单 case**，真正的目标平台是 QBot 和 Cra
 - 在仿真机上实跑 ROS 节点；
 - 把 `RegionScene` 搬回 FaST-BRT，并把 FaST-BRT 加成 submodule（等师妹 push）；
 - 和师妹确定拐角列表 / 事件的接口格式；
-- QBot（4D）和 Crazyflie（6D）的 dynamics 与 profile。
+- Crazyflie（6D）的 dynamics 与 profile；QBot（4D）的拐角修正和 ROS 节点。

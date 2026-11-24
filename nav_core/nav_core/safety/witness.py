@@ -30,7 +30,8 @@ from typing import Optional, Tuple
 
 import numpy as np
 
-__all__ = ["N_CIRCLE", "arc_step", "witness_slack", "candidate_controls", "loiter_sides", "find_witness"]
+__all__ = ["N_CIRCLE", "arc_step", "witness_slack", "candidate_controls", "loiter_sides", "find_witness",
+           "witness_slack_4d", "find_witness_4d"]
 
 N_CIRCLE = 72          # samples on a loiter circle
 R_LOITER = 1.0         # loiter radius = turning radius in model units
@@ -108,3 +109,46 @@ def find_witness(x0, scene, dt: float, use_hj: bool = True) -> Optional[Tuple[np
     if hit.size == 0:
         return None
     return controls[ok[hit[0]]], float(sides[hit[0]])
+
+
+# ---- Dubins 4D: the backup plan is to brake to a stop ----
+
+W_BRAKE = (1.0, -1.0, 0.0, 0.5, -0.5)   # turn rates (times w_max) of the braking candidates, after the HJ one
+
+
+def witness_slack_4d(dt: float, v_bound: float = 1.0) -> float:
+    """Largest distance from a point of the continuous witness to the nearest sample: |v| dt / 2 (no loiter
+    circle; a stopped robot does not move)."""
+    return v_bound * dt / 2.0
+
+
+def find_witness_4d(x0, scene, plant, dt: float, use_hj: bool = True) -> Optional[Tuple[np.ndarray, None]]:
+    """Dubins 4D (model units, state (x, y, theta, v), ``plant`` a ``Dubins4D`` in model units): the first
+    candidate that brakes to a stop, keeping margin > clearance on the way.  Every candidate brakes as hard as
+    needed, a = clip(-v / dt, -a_max, a_max), so the speed reaches 0 exactly at the end of a step; they differ in
+    the turn rate held while braking: the HJ control's (closed loop), then ``W_BRAKE``.  Stopped is safe forever
+    (static obstacles, the map only gains free space).  Returns (controls (K, 2), None) or None."""
+    slack = witness_slack_4d(dt, max(abs(plant.v_min), abs(plant.v_max)))
+    if scene.clearance < slack:
+        raise ValueError(f"clearance {scene.clearance:g} < witness sampling slack {slack:.4g} (dt = {dt:g})")
+    K = int(round(scene.T / dt))
+    W = np.array(W_BRAKE) * plant.w_max
+    C = len(W) + int(use_hj)
+    z = np.repeat(np.asarray(x0, float)[None], C, axis=0)
+    controls = np.zeros((C, K, 2))
+    margin = np.full(C, scene.margin(z[:1, :2])[0])
+    for k in range(K):
+        moving = np.abs(z[:, 3]) > 1e-12
+        if not moving.any():
+            break
+        w = W if not use_hj else np.concatenate([[float(scene.hj_control(z[:1])[0, 1])], W])
+        a = np.clip(-z[:, 3] / dt, -plant.a_max, plant.a_max)
+        u = np.stack([np.where(moving, a, 0.0), np.where(moving, w, 0.0)], 1)
+        controls[:, k] = u
+        z = plant.step_batch(z, u, dt)
+        z[np.abs(z[:, 3]) < 1e-12, 3] = 0.0
+        margin = np.minimum(margin, scene.margin(z[:, :2]))
+    ok = np.flatnonzero((margin > scene.clearance) & (z[:, 3] == 0.0))
+    if ok.size == 0:
+        return None
+    return controls[ok[0]], None

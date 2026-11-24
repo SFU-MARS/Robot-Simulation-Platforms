@@ -1,0 +1,225 @@
+<?xml version="1.0"?>
+<sdf version="1.6">
+  <world name="qbot_occluded">
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+
+    <physics name="default_physics" type="ode">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1</real_time_factor>
+      <real_time_update_rate>1000</real_time_update_rate>
+    </physics>
+
+    <gravity>0 0 -9.8</gravity>
+    <scene>
+      <ambient>0.7 0.7 0.7 1</ambient>
+      <background>0.9 0.9 0.9 1</background>
+      <shadows>true</shadows>
+    </scene>
+
+    <light name="sun" type="directional">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 5 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.5 0.2 -1</direction>
+    </light>
+
+    <!-- 6.0 m x 6.0 m floor; its top surface is at z = 0. -->
+    <model name="map_floor">
+      <static>true</static>
+      <link name="floor">
+        <collision name="floor_collision">
+          <pose>0 0 -0.025 0 0 0</pose>
+          <geometry><box><size>6.2 6.2 0.05</size></box></geometry>
+        </collision>
+        <visual name="floor_visual">
+          <pose>0 0 -0.025 0 0 0</pose>
+          <geometry><box><size>6.2 6.2 0.05</size></box></geometry>
+          <material><ambient>0.82 0.82 0.82 1</ambient><diffuse>0.82 0.82 0.82 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- wall_n: x = [-3.050, 3.050], y = [3.000, 3.050]; perimeter -->
+    <model name="wall_n">
+      <static>true</static>
+      <pose>0.0000 3.0250 0.2 0 0 0</pose>
+      <link name="body">
+        <collision name="collision">
+          <geometry><box><size>6.1000 0.0500 0.4</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>6.1000 0.0500 0.4</size></box></geometry>
+          <material><ambient>0.8 0.05 0.05 1</ambient><diffuse>0.8 0.05 0.05 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- wall_s: x = [-3.050, 3.050], y = [-3.050, -3.000]; perimeter -->
+    <model name="wall_s">
+      <static>true</static>
+      <pose>0.0000 -3.0250 0.2 0 0 0</pose>
+      <link name="body">
+        <collision name="collision">
+          <geometry><box><size>6.1000 0.0500 0.4</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>6.1000 0.0500 0.4</size></box></geometry>
+          <material><ambient>0.8 0.05 0.05 1</ambient><diffuse>0.8 0.05 0.05 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- wall_w: x = [-3.050, -3.000], y = [-3.000, 3.000]; perimeter -->
+    <model name="wall_w">
+      <static>true</static>
+      <pose>-3.0250 0.0000 0.2 0 0 0</pose>
+      <link name="body">
+        <collision name="collision">
+          <geometry><box><size>0.0500 6.0000 0.4</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.0500 6.0000 0.4</size></box></geometry>
+          <material><ambient>0.8 0.05 0.05 1</ambient><diffuse>0.8 0.05 0.05 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- wall_e: x = [3.000, 3.050], y = [-3.000, 3.000]; perimeter -->
+    <model name="wall_e">
+      <static>true</static>
+      <pose>3.0250 0.0000 0.2 0 0 0</pose>
+      <link name="body">
+        <collision name="collision">
+          <geometry><box><size>0.0500 6.0000 0.4</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.0500 6.0000 0.4</size></box></geometry>
+          <material><ambient>0.8 0.05 0.05 1</ambient><diffuse>0.8 0.05 0.05 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- screen_1: x = [-2.000, 0.400], y = [-1.275, -1.125]; screen; 1.7 m to the south wall -->
+    <model name="screen_1">
+      <static>true</static>
+      <pose>-0.8000 -1.2000 0.2 0 0 0</pose>
+      <link name="body">
+        <collision name="collision">
+          <geometry><box><size>2.4000 0.1500 0.4</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>2.4000 0.1500 0.4</size></box></geometry>
+          <material><ambient>0.1 0.2 0.8 1</ambient><diffuse>0.1 0.2 0.8 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- hidden_1: x = [0.650, 1.050], y = [-1.050, -0.650]; box behind the east end of screen_1 -->
+    <model name="hidden_1">
+      <static>true</static>
+      <pose>0.8500 -0.8500 0.2 0 0 0</pose>
+      <link name="body">
+        <collision name="collision">
+          <geometry><box><size>0.4000 0.4000 0.4</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.4000 0.4000 0.4</size></box></geometry>
+          <material><ambient>0.1 0.6 0.1 1</ambient><diffuse>0.1 0.6 0.1 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- screen_2: x = [-0.400, 2.000], y = [0.525, 0.675]; screen; 1.65 m above screen_1, 1.0 m to the east wall -->
+    <model name="screen_2">
+      <static>true</static>
+      <pose>0.8000 0.6000 0.2 0 0 0</pose>
+      <link name="body">
+        <collision name="collision">
+          <geometry><box><size>2.4000 0.1500 0.4</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>2.4000 0.1500 0.4</size></box></geometry>
+          <material><ambient>0.1 0.2 0.8 1</ambient><diffuse>0.1 0.2 0.8 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- hidden_2: x = [-1.050, -0.650], y = [0.750, 1.150]; box behind the west end of screen_2 -->
+    <model name="hidden_2">
+      <static>true</static>
+      <pose>-0.8500 0.9500 0.2 0 0 0</pose>
+      <link name="body">
+        <collision name="collision">
+          <geometry><box><size>0.4000 0.4000 0.4</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.4000 0.4000 0.4</size></box></geometry>
+          <material><ambient>0.1 0.6 0.1 1</ambient><diffuse>0.1 0.6 0.1 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- screen_3: x = [-1.975, -1.825], y = [1.500, 3.000]; screen from the north wall; 1.0 m to the west wall -->
+    <model name="screen_3">
+      <static>true</static>
+      <pose>-1.9000 2.2500 0.2 0 0 0</pose>
+      <link name="body">
+        <collision name="collision">
+          <geometry><box><size>0.1500 1.5000 0.4</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.1500 1.5000 0.4</size></box></geometry>
+          <material><ambient>0.1 0.2 0.8 1</ambient><diffuse>0.1 0.2 0.8 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- hidden_3: x = [-1.750, -1.350], y = [1.550, 1.950]; box behind the south end of screen_3 -->
+    <model name="hidden_3">
+      <static>true</static>
+      <pose>-1.5500 1.7500 0.2 0 0 0</pose>
+      <link name="body">
+        <collision name="collision">
+          <geometry><box><size>0.4000 0.4000 0.4</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.4000 0.4000 0.4</size></box></geometry>
+          <material><ambient>0.1 0.6 0.1 1</ambient><diffuse>0.1 0.6 0.1 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- pillar_1: x = [2.100, 2.500], y = [-2.500, -2.100]; pillar near the south-east corner (closed: 0.5 m to the walls) -->
+    <model name="pillar_1">
+      <static>true</static>
+      <pose>2.3000 -2.3000 0.2 0 0 0</pose>
+      <link name="body">
+        <collision name="collision">
+          <geometry><box><size>0.4000 0.4000 0.4</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.4000 0.4000 0.4</size></box></geometry>
+          <material><ambient>0.1 0.2 0.8 1</ambient><diffuse>0.1 0.2 0.8 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- pillar_2: x = [0.700, 1.100], y = [1.650, 2.050]; free-standing pillar; 0.95 m to the north wall, 0.975 m to screen_2 -->
+    <model name="pillar_2">
+      <static>true</static>
+      <pose>0.9000 1.8500 0.2 0 0 0</pose>
+      <link name="body">
+        <collision name="collision">
+          <geometry><box><size>0.4000 0.4000 0.4</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.4000 0.4000 0.4</size></box></geometry>
+          <material><ambient>0.1 0.2 0.8 1</ambient><diffuse>0.1 0.2 0.8 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+  </world>
+</sdf>

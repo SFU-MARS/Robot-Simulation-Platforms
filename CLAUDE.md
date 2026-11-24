@@ -8,7 +8,7 @@ The robot navigates an **unknown** map with a nominal controller (pursuit or MPP
 
 Robots:
 - TurtleBot3 Burger: Dubins3D, constant speed; this one is ready.
-- QBot: Dubins4D; placeholder.
+- QBot (Quanser QBot Platform): Dubins4D (x, y, θ, v), control (a, w); offline V0 and the ROS-free closed loop are done (docs/15), corner correction and ROS not yet.
 - Crazyflie: 6D; placeholder.
 
 ## Where code goes

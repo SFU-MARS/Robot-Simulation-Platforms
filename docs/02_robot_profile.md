@@ -41,7 +41,7 @@ from nav_core.robots import load_profile
 p = load_profile("burger").require_ready()
 ```
 
-`require_ready()` 对 placeholder 机器人直接抛异常，避免拿着一堆 `null` 往下跑。QBot 和 Crazyflie 现在都是 placeholder。
+`require_ready()` 对 placeholder 机器人直接抛异常，避免拿着一堆 `null` 往下跑。Crazyflie 现在是 placeholder。QBot（`dynamics: dubins4d`）从 2026-11-23 起是 ready：`phys` 写 `v_min`、`v_max`、`a_max`、`w_max`，单位换算加了速度和加速度（`speed_to_model`、`accel_to_model`），`profile.model` 是车的模型（`robots/dynamics.py` 的 `Dubins3D` / `Dubins4D`），见 [15](15_qbot_dubins4d.md)。
 
 `sensor.height` 的用处：仿真时从 SDF world 里**只取穿过扫描平面的 collision box**，地板和 goal 贴纸会被自动过滤掉，障碍和 Gazebo 里 lidar 看到的完全一致。
 

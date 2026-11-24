@@ -39,9 +39,28 @@ def test_profiles():
     fast = dataclasses.replace(p, phys={**p.phys, "v": 0.2, "w_max": 2.0})
     with pytest.raises(ValueError, match="wheel_v_max"):
         fast.check_limits()                                     # outer wheel would need 0.36 m/s
-    for name in ("qbot", "crazyflie"):
-        with pytest.raises(RuntimeError):
-            load_profile(name).require_ready()
+    with pytest.raises(RuntimeError):
+        load_profile("crazyflie").require_ready()
+
+
+def test_qbot_profile_and_4d_plant():
+    """QBot: model units of fast-brt's 4D V0 (w_max = v_max = 1); the exact 4D step against a fine integral, with
+    the speed reaching its limit within the step"""
+    from nav_core.robots.dynamics import Dubins4D
+    p = load_profile("qbot").require_ready()
+    u = p.units
+    assert (u.length, u.time) == pytest.approx((1.6, 2.0))
+    assert [float(u.speed_to_model(p.phys[k])) for k in ("v_min", "v_max")] == pytest.approx([-0.25, 1.0])
+    assert float(u.accel_to_model(p.phys["a_max"])) == pytest.approx(1.25)
+    m = p.model
+    assert isinstance(m, Dubins4D) and m.n_state == 4 and m.n_control == 2
+    x, ctrl, dt = np.array([0.3, -0.2, 0.7, 0.6]), np.array([0.5, -0.4]), 1.5        # reaches v_max after 0.4 s
+    y = m.step(x, ctrl, dt)
+    t = (np.arange(200000) + 0.5) * dt / 200000
+    v, th = np.minimum(x[3] + ctrl[0] * t, m.v_max), x[2] + ctrl[1] * t
+    ref = [x[0] + np.sum(v * np.cos(th)) * dt / len(t), x[1] + np.sum(v * np.sin(th)) * dt / len(t)]
+    assert y[:2] == pytest.approx(ref, abs=1e-8) and y[3] == pytest.approx(m.v_max)
+    assert m.step(np.array([0.0, 0.0, 0.0, 0.1]), np.array([-0.5, 0.0]), 2.0)[3] == pytest.approx(m.v_min)
 
 
 def test_scan_marks_free_hit_and_shadow():

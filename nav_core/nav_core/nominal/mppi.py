@@ -1,6 +1,7 @@
 """
-Map-aware MPPI nominal controller (Dubins 3D, constant speed, control = turn
-rate).  No safety guarantee: it is optimistic about unknown space and only
+Map-aware MPPI nominal controller: Dubins 3D (constant speed, control = turn
+rate), or any model with a vectorized step and control bounds (Dubins 4D:
+control (a, w), ``MPPI.for_model``).  No safety guarantee: it is optimistic about unknown space and only
 steers the safety filter's input towards the goal and away from obstacles.
 
 Costs, from the accumulated map (``CostMap``, rebuilt when the map changes):
@@ -84,17 +85,28 @@ class CostMap:
 
 
 class MPPI:
-    """``control(x, goal, grid) -> w`` (rad / s)."""
+    """``control(x, goal, grid) -> w`` (rad / s); with ``u_low``, ``u_high`` (m,) and ``step(z, u (N, m), dt)``:
+    -> u (m,), sampled with standard deviation ``sigma`` times each bound."""
 
     def __init__(self, v: float, w_max: float, footprint_radius: float, horizon: int = 30, dt: float = 0.1,
                  n_samples: int = 256, sigma: float = 0.6, lam: float = 0.05, margin: float = 0.03,
-                 step: Optional[Callable] = None, seed: int = 0):
+                 step: Optional[Callable] = None, seed: int = 0, u_low=None, u_high=None):
         self.v, self.w_max, self.r, self.margin = v, w_max, footprint_radius, margin
-        self.H, self.dt, self.N, self.sigma, self.lam = horizon, dt, n_samples, sigma * w_max, lam
+        self.low = np.array([-w_max] if u_low is None else u_low, float)
+        self.high = np.array([w_max] if u_high is None else u_high, float)
+        self.m = len(self.low)
+        self.H, self.dt, self.N, self.lam = horizon, dt, n_samples, lam
+        self.sigma = sigma * w_max if self.m == 1 else sigma * np.maximum(np.abs(self.low), np.abs(self.high))
         self.step = step or (lambda z, w, dt: unicycle_step_batch(z, self.v, w, dt))
-        self.u = np.zeros(horizon)
+        self.u = np.zeros(horizon) if self.m == 1 else np.zeros((horizon, self.m))
         self.rng = np.random.default_rng(seed)
         self._key, self.costmap = None, None
+
+    @classmethod
+    def for_model(cls, model, footprint_radius: float, **kw) -> "MPPI":
+        """MPPI over the controls of ``model`` (``nav_core.robots.dynamics``, e.g. Dubins4D: (a, w))."""
+        return cls(0.0, model.u_high[-1], footprint_radius, step=model.step_batch, u_low=model.u_low,
+                   u_high=model.u_high, **kw)
 
     def _costmap(self, grid, goal) -> CostMap:
         key = (tuple(np.round(goal, 6)), (grid.state() == OCCUPIED).tobytes())
@@ -106,7 +118,11 @@ class MPPI:
         if grid is None:
             raise ValueError("MPPI needs the map")
         cm = self._costmap(grid, goal)
-        U = np.clip(self.u[None] + self.rng.normal(0.0, self.sigma, (self.N, self.H)), -self.w_max, self.w_max)
+        if self.m == 1:
+            U = np.clip(self.u[None] + self.rng.normal(0.0, self.sigma, (self.N, self.H)), -self.w_max, self.w_max)
+        else:
+            U = np.clip(self.u[None] + self.rng.normal(0.0, 1.0, (self.N, self.H, self.m)) * self.sigma,
+                        self.low, self.high)
         U[0] = self.u                                     # keep the previous plan as a sample
         z = np.repeat(np.asarray(x, float)[None], self.N, axis=0)
         cost = np.zeros(self.N)
@@ -117,7 +133,12 @@ class MPPI:
         cost += 2.0 * c2g                                  # terminal cost-to-go
         w = np.exp(-(cost - cost.min()) / self.lam)
         w /= w.sum()
-        self.u = np.clip(w @ U, -self.w_max, self.w_max)
-        out = float(self.u[0])
-        self.u = np.r_[self.u[1:], self.u[-1]]
+        if self.m == 1:
+            self.u = np.clip(w @ U, -self.w_max, self.w_max)
+            out = float(self.u[0])
+            self.u = np.r_[self.u[1:], self.u[-1]]
+            return out
+        self.u = np.clip(np.einsum("n,nhm->hm", w, U), self.low, self.high)
+        out = self.u[0].copy()
+        self.u = np.concatenate([self.u[1:], self.u[-1:]])
         return out

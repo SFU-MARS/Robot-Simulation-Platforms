@@ -2,10 +2,15 @@
 Robot profiles (robots/<name>.yaml): the single source of the per-robot
 parameters -- dynamics name, physical limits, footprint, sensor, map, world.
 
-Units.  FaST-BRT's Dubins 3D model is nondimensional (v = 1, |w| <= 1, turning
-radius 1).  For a robot with speed v and turn-rate bound w_max, one model
-length unit is v / w_max metres and one model time unit is 1 / w_max seconds.
-Other dynamics use identity units until their models fix a scaling.
+Units.  fast-brt's models are nondimensional.  Dubins 3D: v = 1, |w| <= 1
+(turning radius 1); for a robot with speed v and turn-rate bound w_max, one
+model length unit is v / w_max metres and one model time unit is 1 / w_max
+seconds.  Dubins 4D: |w| <= 1 and v_max = 1, so the same with v = v_max; the
+other limits follow (v_min v / ..., a_max time^2 / length).  Other dynamics use
+identity units until their models fix a scaling.
+
+``profile.model`` is the plant (``dynamics.py``): Dubins3D (x, y, theta) or
+Dubins4D (x, y, theta, v), in physical units.
 """
 
 from __future__ import annotations
@@ -16,6 +21,8 @@ from typing import Optional, Tuple
 
 import numpy as np
 import yaml
+
+from .dynamics import Dubins3D, Dubins4D
 
 __all__ = ["SensorSpec", "MapSpec", "Units", "RobotProfile", "load_profile", "ROBOTS_DIR"]
 
@@ -60,6 +67,20 @@ class Units:
     def rate_to_phys(self, w):
         return np.asarray(w, float) / self.time
 
+    def speed_to_model(self, v):
+        """Speed (m / s) -> model length per model time."""
+        return np.asarray(v, float) * self.time / self.length
+
+    def speed_to_phys(self, v):
+        return np.asarray(v, float) * self.length / self.time
+
+    def accel_to_model(self, a):
+        """Acceleration (m / s^2) -> model units."""
+        return np.asarray(a, float) * self.time ** 2 / self.length
+
+    def accel_to_phys(self, a):
+        return np.asarray(a, float) * self.length / self.time ** 2
+
 
 @dataclass(frozen=True)
 class RobotProfile:
@@ -87,7 +108,19 @@ class RobotProfile:
     def units(self) -> Units:
         if self.dynamics == "dubins3d":
             return Units(length=self.phys["v"] / self.phys["w_max"], time=1.0 / self.phys["w_max"])
+        if self.dynamics == "dubins4d":
+            return Units(length=self.phys["v_max"] / self.phys["w_max"], time=1.0 / self.phys["w_max"])
         return Units()
+
+    @property
+    def model(self):
+        """The plant in physical units (``dynamics.Dubins3D`` or ``Dubins4D``)."""
+        p = self.phys
+        if self.dynamics == "dubins3d":
+            return Dubins3D(p["v"], p["w_max"])
+        if self.dynamics == "dubins4d":
+            return Dubins4D(p["v_min"], p["v_max"], p["a_max"], p["w_max"])
+        raise NotImplementedError(f"no plant model for dynamics {self.dynamics!r}")
 
     def require_ready(self) -> "RobotProfile":
         if self.status != "ready":
@@ -96,14 +129,16 @@ class RobotProfile:
 
     def check_limits(self) -> None:
         """Raise if the dynamics parameters exceed the robot's actuation.
-        Dubins 3D on a differential drive: the outer wheel runs at
-        v + w_max * track_width / 2, so v and w_max cannot both be at their
-        separate maxima.  Other dynamics: no check until their models define one."""
+        On a differential drive the outer wheel runs at v + w_max * track_width / 2
+        (Dubins 3D: v; Dubins 4D: the larger of |v_min| and v_max), so the speed
+        and w_max cannot both be at their separate maxima.  Other dynamics: no
+        check until their models define one."""
         p = self.phys
-        if self.dynamics == "dubins3d" and "track_width" in p and "wheel_v_max" in p:
-            wheel = p["v"] + p["w_max"] * p["track_width"] / 2
+        speed = {"dubins3d": lambda: p["v"], "dubins4d": lambda: max(abs(p["v_min"]), abs(p["v_max"]))}
+        if self.dynamics in speed and "track_width" in p and "wheel_v_max" in p:
+            wheel = speed[self.dynamics]() + p["w_max"] * p["track_width"] / 2
             if wheel > p["wheel_v_max"] + 1e-12:
-                raise ValueError(f"{self.name}: v + w_max * track_width / 2 = {wheel:.3f} m/s exceeds "
+                raise ValueError(f"{self.name}: speed + w_max * track_width / 2 = {wheel:.3f} m/s exceeds "
                                  f"wheel_v_max = {p['wheel_v_max']} m/s")
 
 

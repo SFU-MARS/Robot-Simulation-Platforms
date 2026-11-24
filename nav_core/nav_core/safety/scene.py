@@ -1,5 +1,7 @@
 """
 What the safety filters see each control period, in model units (v = 1, |w| <= 1; ``profile.units`` converts).
+States in model units keep nav_core's order: (x, y, theta) for Dubins 3D, (x, y, theta, v) for Dubins 4D, whose V0
+(fast-brt) is ordered (x, y, v, theta): ``Scene`` reorders for the queries.
 
 The accumulated map, shrunk by the robot footprint (so the robot is a point), gives the region the robot may use
 and the edges the filter must respect; every edge becomes one primitive whose HJ value comes from an offline V0
@@ -175,8 +177,10 @@ class Scene:
     region, if any) U (primitive rectangles); ``margin`` is the signed
     distance to it (positive = free)."""
 
-    def __init__(self, v0, faces, rings, clearance: float, horizon: float, corners=()):
+    def __init__(self, v0, faces, rings, clearance: float, horizon: float, corners=(), rect_margin: bool = True):
         self.v0, self.faces = v0, faces
+        self.rect_margin = rect_margin                # the primitive rectangles are part of the modelled obstacle
+        self.four = v0.dims == 4                      # Dubins 4D: states (x, y, theta, v), V0 (x, y, v, theta)
         self.corners = list(corners)                  # fast_brt.corner.CornerWindow: corrected values at corners
         self.frames = faces.rectangles()
         self.rings = rings
@@ -206,7 +210,7 @@ class Scene:
                 inside &= ~_contains(hole, xy)
             d = self._seg_dist(xy, self._RA, self._RB)
             m = np.where(inside, d, -d)
-        if len(self.faces):
+        if len(self.faces) and (self.rect_margin or not self.rings):
             d = xy[None] - self._C[:, None]
             xl = self._cos[:, None] * d[..., 0] + self._sin[:, None] * d[..., 1]
             yl = -self._sin[:, None] * d[..., 0] + self._cos[:, None] * d[..., 1]
@@ -214,10 +218,15 @@ class Scene:
             m = np.minimum(m, rect)
         return m
 
+    def _v0_states(self, states: np.ndarray) -> np.ndarray:
+        """States in V0's order: Dubins 4D (x, y, theta, v) -> (x, y, v, theta)."""
+        states = np.atleast_2d(states)
+        return states[:, [0, 1, 3, 2]] if self.four else states
+
     def value(self, states: np.ndarray) -> np.ndarray:
         """HJ value of the union of the primitives at states (N, 3), lowered at the corrected corners; inf without
         primitives."""
-        out = self.v0.value(states, self.faces)
+        out = self.v0.value(self._v0_states(states), self.faces)
         for w in self.corners:
             out = np.minimum(out, w.values(states))
         return out
@@ -226,7 +235,7 @@ class Scene:
         """Distance margin of the union (model length units, ``PrimitiveV0.margin``): every state within it (same
         heading) is outside the BRT of every primitive; inf without primitives. Lowered at the corrected corners
         (their values are in the linear encoding)."""
-        out = self.v0.margin(states, self.faces)
+        out = self.v0.margin(self._v0_states(states), self.faces)
         lipschitz = max(1.0, float(np.sqrt(self.v0.alpha)))
         for w in self.corners:
             out = np.minimum(out, w.values(states) / lipschitz)
@@ -234,8 +243,13 @@ class Scene:
 
     def hj_control(self, states: np.ndarray) -> np.ndarray:
         """Optimal turn rate w = sign(dV/dtheta) of what gives the value: the nearest primitive, or a corrected
-        corner where it is lower; straight without primitives."""
+        corner where it is lower; straight without primitives.  Dubins 4D: (N, 2) (a, w), a = a_max sign(dV/dv);
+        without primitives no acceleration and straight."""
         states = np.atleast_2d(states)
+        if self.four:
+            if not len(self.faces):
+                return np.zeros((len(states), 2))
+            return self.v0.query(self._v0_states(states), self.faces).control
         if not len(self.faces):
             return np.zeros(len(states))
         q = self.v0.query(states, self.faces)
@@ -263,18 +277,36 @@ class SceneFilter:
     Only corners between obstacle faces by default; ``corner_frontier=True`` also corrects corners with a frontier
     edge (no difference in safety in the batches of docs/13, 23-32 % more solve time: the frontier moves every scan).
     ``corner_mode``: "sync" (solve at once), "delayed" (simulation: the result is usable once the measured solve
-    time has passed in simulated time, solves queue on one simulated worker) or "thread" (a background thread)."""
+    time has passed in simulated time, solves queue on one simulated worker) or "thread" (a background thread).
+
+    ``rect_margin``: whether the primitive rectangles are part of the modelled obstacle of ``Scene.margin`` (the
+    witnesses' check) next to the complement of the region.  The region alone is already the configuration space
+    of the known free space with round corners (a distance transform of the map), so it is safe on its own; the
+    rectangles add conservatism, which is large for a large footprint: faces are extended by the footprint radius at
+    their ends (square corners, and free ends of runs next to unknown space), and the rectangles' thickness reaches
+    out of thin walls.  For the QBot (radius 0.285 m) a growing map then covers a robot that had stopped safely next
+    to an obstacle, and it never has a witness again.  Default True for Dubins 3D (unchanged), False for Dubins 4D;
+    filters without a region always use the rectangles."""
 
     uses_region = True                         # filters that only use the primitives set False: no region is built
 
     def __init__(self, profile, v0=None, unknown: str = "occupied", primitives: str = "faces",
-                 placement: str = "inward", cut: bool = False, horizon: float = 2.0, sub_dt: float = 0.05,
+                 placement: str = "inward", cut: bool = False, horizon: float = 2.0, sub_dt: "float | None" = None,
                  clearance: "float | None" = None, h_max: "float | None" = None, corners: bool = False,
                  corner_dx: float = 0.1, corner_reuse: float = 0.2, corner_frontier: bool = False,
-                 corner_theta: "int | None" = 30, corner_warm: bool = True, corner_mode: str = "sync"):
+                 corner_theta: "int | None" = 30, corner_warm: bool = True, corner_mode: str = "sync",
+                 rect_margin: "bool | None" = None):
         profile.require_ready()
-        if profile.dynamics != "dubins3d":
+        if profile.dynamics not in ("dubins3d", "dubins4d"):
             raise NotImplementedError(f"{type(self).__name__} for dynamics {profile.dynamics!r}")
+        self.four = profile.dynamics == "dubins4d"
+        if self.four and corners:
+            raise NotImplementedError("the corner correction (fast_brt.corner) is for Dubins 3D only so far")
+        if sub_dt is None:
+            sub_dt = 0.025 if self.four else 0.05       # model time: Burger 0.05 s, QBot 0.05 s (unit 2 s)
+        # the modelled obstacle of the backup filter's witnesses: the complement of the region, and the primitive
+        # rectangles too unless rect_margin is False (default: True for Dubins 3D, False for 4D, see the docstring)
+        self.rect_margin = (not self.four) if rect_margin is None else rect_margin
         if unknown not in ("occupied", "free"):
             raise ValueError(f"unknown must be 'occupied' or 'free', got {unknown!r}")
         if primitives not in ("faces", "rings"):
@@ -287,10 +319,21 @@ class SceneFilter:
                 raise ValueError(f"no V0: set base_value in robots/{profile.name}.yaml, {V0_ENV}, or pass v0")
         self.v0 = load_v0(v0, getattr(profile, "root", None))
         p = self.v0.dynamics_params
-        if (self.v0.dynamics != "dubins_3d" or p.get("v", 1) != 1 or p.get("wMax", 1) != 1
+        if self.four:
+            u, ph = profile.units, profile.phys
+            want = {"vMin": float(u.speed_to_model(ph["v_min"])), "vMax": 1.0,
+                    "aMax": float(u.accel_to_model(ph["a_max"])), "wMax": 1.0}
+            if (self.v0.dynamics != "dubins_4d" or p.get("uMode", "max") != "max"
+                    or any(not np.isclose(float(p.get(k, np.nan)), v) for k, v in want.items())):
+                raise ValueError(f"V0 must be the avoid value of the robot's Dubins 4D in model units ({want}, uMode "
+                                 f"max), got {self.v0.dynamics} {p}")
+            self.plant_model = profile.model.__class__(want["vMin"], 1.0, want["aMax"], 1.0)   # model units
+        elif (self.v0.dynamics != "dubins_3d" or p.get("v", 1) != 1 or p.get("wMax", 1) != 1
                 or p.get("uMode", "max") != "max"):
             raise ValueError(f"V0 must be the avoid value of the model Dubins 3D (v = wMax = 1, uMode max), got "
                              f"{self.v0.dynamics} {p}")
+        else:
+            self.plant_model = None
         self.alpha = self.v0.alpha
         self.profile, self.units, self.unknown, self.primitives = profile, profile.units, unknown, primitives
         self.placement = placement
@@ -329,7 +372,26 @@ class SceneFilter:
         self.corner_seconds = 0.0
 
     def to_model(self, x) -> np.ndarray:
-        return np.array([*self.units.pos_to_model(x[:2]), x[2] % (2 * np.pi)])
+        """State in model units: (x, y, theta), or (x, y, theta, v) for Dubins 4D."""
+        out = [*self.units.pos_to_model(x[:2]), x[2] % (2 * np.pi)]
+        if self.four:
+            out.append(float(self.units.speed_to_model(x[3])))
+        return np.array(out)
+
+    def control_to_model(self, u) -> np.ndarray:
+        """A control in physical units -> model units, within the bounds: (w,) or (a, w)."""
+        u = np.ravel(np.asarray(u, float))
+        if self.four:
+            hi = self.plant_model.u_high
+            return np.clip([self.units.accel_to_model(u[0]), self.units.rate_to_model(u[1])], -hi, hi)
+        return np.clip(self.units.rate_to_model(u[:1]), -1.0, 1.0)
+
+    def controls_to_phys(self, us) -> np.ndarray:
+        """Controls (k, m) in model units -> physical units: rates (k,) for Dubins 3D, (k, 2) for Dubins 4D."""
+        us = np.asarray(us, float)
+        if self.four:
+            return np.stack([self.units.accel_to_phys(us[:, 0]), self.units.rate_to_phys(us[:, 1])], 1)
+        return self.units.rate_to_phys(us.reshape(len(us), -1)[:, 0])
 
     def scene(self, x, grid) -> Scene:
         """The scene (model units) the filter sees at pose ``x``."""
@@ -354,7 +416,7 @@ class SceneFilter:
                              for e in boundary_edges(grid, footprint_radius=r) if e.kind == "frontier"]
         faces = place_faces(self.v0, segments, self.placement, self.max_side_len)
         return Scene(self.v0, faces, rings, self.clearance, self.horizon,
-                     self.corner_windows(faces, self.units.pos_to_model(x[:2])))
+                     self.corner_windows(faces, self.units.pos_to_model(x[:2])), rect_margin=self.rect_margin)
 
     def corner_windows(self, faces, xy=None) -> list:
         """Corrected corner windows of the faces (``corners=True``) that can matter at ``xy`` (model units, the

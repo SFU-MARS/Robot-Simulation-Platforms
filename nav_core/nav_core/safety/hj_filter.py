@@ -1,5 +1,9 @@
 """
-HJ filters (Dubins 3D) on the primitive values, as ``nav_core.sim`` safety hooks.
+HJ filters (Dubins 3D and 4D) on the primitive values, as ``nav_core.sim`` safety hooks.
+
+Dubins 4D (QBot): the nominal control is (a, w), the HJ evasion is the optimal (a, w) of the nearest primitive,
+a = a_max sign(dV/dv) and w = w_max sign(dV/dtheta), and the predicted sub-steps are exact (speed limits included);
+no corner correction yet (fast_brt.corner is 3D), so ``corners`` defaults to on for Dubins 3D only.
 
 Both compare the distance margin of the union of the primitives (``Scene.hj_margin``: each face's value in the
 linear encoding divided by its Lipschitz constant sqrt(alpha), so a state with margin d is at least d, at the
@@ -43,10 +47,26 @@ from .witness import arc_step
 __all__ = ["HJBackupFilter", "HJFilter", "hj_rates"]
 
 
-def hj_rates(model, xm, wm: float, n_sub: int, dt: float, margin: float = 0.0):
+def hj_rates(model, xm, wm, n_sub: int, dt: float, margin: float = 0.0, plant=None):
     """Turn rates (model units) of the HJ filter for one period from xm: the nominal ``wm`` held if the distance
     margin (model units) stays above ``margin`` on its predicted sub-steps, else the closed-loop HJ evasion.
-    Returns (rates, evaded)."""
+    Returns (rates, evaded).  With ``plant`` (Dubins 4D in model units): ``wm`` is the control (a, w) and the
+    controls are (n_sub, 2)."""
+    if plant is not None:
+        um = np.asarray(wm, float)
+        z = xm[None].copy()
+        for _ in range(n_sub):
+            z = plant.step_batch(z, um[None], dt)
+            if model.hj_margin(z)[0] <= margin:
+                break
+        else:
+            return np.tile(um, (n_sub, 1)), False
+        z = xm[None].copy()
+        us = np.empty((n_sub, 2))
+        for k in range(n_sub):
+            us[k] = model.hj_control(z)[0]
+            z = plant.step_batch(z, us[k:k + 1], dt)
+        return us, True
     z = xm[None].copy()
     for _ in range(n_sub):
         arc_step(z, np.array([wm]), dt)
@@ -66,14 +86,20 @@ def model_margin(f, margin: float, robust: bool) -> float:
     """``margin`` (m) of filter ``f`` in model units, plus the clearance and the sampling gap if ``robust``."""
     m = margin / f.units.length
     if robust:
-        m += f.clearance + (1.0 + f.v0.horizon) * f.sub_dt / 2.0          # v = w_max = 1 in model units
+        if getattr(f, "four", False):              # |v| <= 1, w_max = 1, and a speed change dv moves by <= T dv
+            m += f.clearance + (1.0 + f.v0.horizon + f.v0.horizon * f.plant_model.a_max) * f.sub_dt / 2.0
+        else:
+            m += f.clearance + (1.0 + f.v0.horizon) * f.sub_dt / 2.0      # v = w_max = 1 in model units
     return m
 
 
 class HJFilter(SceneFilter):
     uses_region = False
 
-    def __init__(self, profile, v0=None, margin: float = 0.0, robust: bool = False, corners: bool = True, **kw):
+    def __init__(self, profile, v0=None, margin: float = 0.0, robust: bool = False, corners: "bool | None" = None,
+                 **kw):
+        if corners is None:                        # on for Dubins 3D; the 4D correction does not exist yet
+            corners = profile.dynamics == "dubins3d"
         super().__init__(profile, v0, corners=corners, **kw)
         self.margin, self.robust = margin, robust
         self.margin_model = model_margin(self, margin, robust)
@@ -82,6 +108,12 @@ class HJFilter(SceneFilter):
         """ZOH turn rates (rad / s) for the ``n_sub`` sub-steps of this period."""
         model = self.scene(x, grid)
         self.model = model
+        if self.four:
+            us, evaded = hj_rates(model, self.to_model(x), self.control_to_model(w_nom), self.n_sub, self.sub_dt,
+                                  self.margin_model, self.plant_model)
+            self.steps += 1
+            self.interventions += int(evaded)
+            return self.controls_to_phys(us)
         wm = float(np.clip(self.units.rate_to_model(w_nom), -1.0, 1.0))
         ws, evaded = hj_rates(model, self.to_model(x), wm, self.n_sub, self.sub_dt, self.margin_model)
         self.steps += 1
@@ -103,11 +135,15 @@ class HJBackupFilter(BackupFilter):
         self.model = model
         xm = self.to_model(x)
         self._start(model, xm)
-        wm = float(np.clip(self.units.rate_to_model(w_nom), -1.0, 1.0))
-        proposed, evaded = hj_rates(model, xm, wm, self.n_sub, self.sub_dt, self.margin_model)
+        if self.four:
+            proposed, evaded = hj_rates(model, xm, self.control_to_model(w_nom), self.n_sub, self.sub_dt,
+                                        self.margin_model, self.plant_model)
+        else:
+            wm = float(np.clip(self.units.rate_to_model(w_nom), -1.0, 1.0))
+            proposed, evaded = hj_rates(model, xm, wm, self.n_sub, self.sub_dt, self.margin_model)
         ws, accepted = self._gate(model, xm, proposed)
         self.steps += 1
         self.hj_interventions += int(evaded and accepted)
         self.backup_interventions += int(not accepted)
         self.interventions += int(evaded or not accepted)
-        return self.units.rate_to_phys(ws)
+        return self.controls_to_phys(ws) if self.four else self.units.rate_to_phys(ws)

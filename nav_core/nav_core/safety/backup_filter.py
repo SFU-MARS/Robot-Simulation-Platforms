@@ -1,10 +1,11 @@
 """
-Backup filter (Dubins 3D) as a ``nav_core.sim`` safety hook.
+Backup filter (Dubins 3D and 4D) as a ``nav_core.sim`` safety hook.
 
 Each period the filter builds the scene (``scene.py``: the region from the
-accumulated map, one primitive per edge, V0) and accepts the nominal turn
-rate only if a witness (backup plan, ``witness.py``) exists from the next
-state: a rollout that keeps the clearance and ends on a free loiter circle.
+accumulated map, one primitive per edge, V0) and accepts the nominal control
+only if a witness (backup plan, ``witness.py``) exists from the next state: a
+rollout that keeps the clearance and ends safe forever -- on a free loiter
+circle (Dubins 3D, constant speed) or stopped (Dubins 4D: brake to v = 0).
 Otherwise it executes the previously committed witness.  Ported from the
 witness gatekeeper of Hu-Hanyang/FaST-BRT.
 
@@ -22,7 +23,7 @@ from __future__ import annotations
 import numpy as np
 
 from .scene import SceneFilter
-from .witness import arc_step, find_witness, witness_slack
+from .witness import arc_step, find_witness, find_witness_4d, witness_slack, witness_slack_4d
 
 __all__ = ["BackupFilter"]
 
@@ -30,17 +31,28 @@ __all__ = ["BackupFilter"]
 class BackupFilter(SceneFilter):
     def __init__(self, profile, v0=None, use_hj: bool = True, **kw):
         super().__init__(profile, v0, **kw)
-        if self.clearance < witness_slack(self.sub_dt):
-            raise ValueError(f"clearance {self.clearance:g} (model units) < witness sampling slack "
-                             f"{witness_slack(self.sub_dt):.4g}")
+        slack = witness_slack_4d(self.sub_dt) if self.four else witness_slack(self.sub_dt)
+        if self.clearance < slack:
+            raise ValueError(f"clearance {self.clearance:g} (model units) < witness sampling slack {slack:.4g}")
         self.use_hj = use_hj
         self.K = int(round(self.horizon / self.sub_dt))
         self.plan = None                               # committed witness, padded to K steps with its loiter turn
-        self.loiter = 0.0
+        self.loiter = 0.0                              # (Dubins 4D: padded with "stay stopped", a = w = 0)
         self.started = False
 
+    def _find(self, z, model):
+        if self.four:
+            return find_witness_4d(z, model, self.plant_model, self.sub_dt, self.use_hj)
+        return find_witness(z, model, self.sub_dt, self.use_hj)
+
     def _commit(self, found) -> None:
-        plan, self.loiter = found
+        plan, loiter = found
+        if self.four:
+            if len(plan) < self.K:
+                plan = np.concatenate([plan, np.zeros((self.K - len(plan), 2))])
+            self.plan = plan
+            return
+        self.loiter = loiter
         if plan.size < self.K:
             plan = np.concatenate([plan, np.full(self.K - plan.size, self.loiter)])
         self.plan = plan
@@ -48,34 +60,45 @@ class BackupFilter(SceneFilter):
     def _start(self, model, xm) -> None:
         """Commit a witness from the first state; RuntimeError if there is none (the robot does not start)."""
         if not self.started:
-            found = find_witness(xm, model, self.sub_dt, self.use_hj)
+            found = self._find(xm, model)
             if found is None:
                 raise RuntimeError("no witness at the start")
             self._commit(found)
             self.started = True
 
     def _gate(self, model, xm, ws: np.ndarray):
-        """Turn rates (model units) for this period: ``ws`` if it keeps the clearance and a witness exists from
-        where it ends (the witness becomes the plan), else the committed plan.  Returns (rates, accepted)."""
+        """Controls (model units) for this period: ``ws`` if it keeps the clearance and a witness exists from
+        where it ends (the witness becomes the plan), else the committed plan.  Returns (controls, accepted):
+        turn rates (n_sub,) for Dubins 3D, (n_sub, 2) for Dubins 4D."""
         z = xm[None].copy()
         seg_margin = np.inf
         for w in ws:
-            arc_step(z, np.array([w]), self.sub_dt)
+            if self.four:
+                z = self.plant_model.step_batch(z, np.asarray(w, float)[None], self.sub_dt)
+            else:
+                arc_step(z, np.array([w]), self.sub_dt)
             seg_margin = min(seg_margin, model.margin(z[:, :2])[0])
-        found = find_witness(z[0], model, self.sub_dt, self.use_hj) if seg_margin > model.clearance else None
+        found = self._find(z[0], model) if seg_margin > model.clearance else None
         if found is not None:
             self._commit(found)
             return np.asarray(ws, float), True
-        plan = self.plan[:self.n_sub]                  # execute the committed plan, keep loitering after it
-        self.plan = np.concatenate([self.plan[self.n_sub:], np.full(self.n_sub, self.loiter)])
+        plan = self.plan[:self.n_sub]                  # execute the committed plan, keep loitering (stopped) after it
+        pad = np.zeros((self.n_sub, 2)) if self.four else np.full(self.n_sub, self.loiter)
+        self.plan = np.concatenate([self.plan[self.n_sub:], pad])
         return np.asarray(plan, float), False
 
-    def __call__(self, x, w_nom: float, grid) -> np.ndarray:
-        """ZOH turn rates (rad / s) for the ``n_sub`` sub-steps of this period."""
+    def __call__(self, x, w_nom, grid) -> np.ndarray:
+        """ZOH controls for the ``n_sub`` sub-steps of this period: turn rates (rad / s), or (a, w) rows
+        (m / s^2, rad / s) for Dubins 4D."""
         model = self.scene(x, grid)
         self.model = model
         xm = self.to_model(x)
         self._start(model, xm)
+        if self.four:
+            ws, accepted = self._gate(model, xm, np.tile(self.control_to_model(w_nom), (self.n_sub, 1)))
+            self.steps += 1
+            self.interventions += int(not accepted)
+            return self.controls_to_phys(ws)
         wm = float(np.clip(self.units.rate_to_model(w_nom), -1.0, 1.0))
         ws, accepted = self._gate(model, xm, np.full(self.n_sub, wm))
         self.steps += 1

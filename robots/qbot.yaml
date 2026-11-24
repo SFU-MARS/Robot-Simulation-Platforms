@@ -1,21 +1,33 @@
-# Quanser QBot -- Dubins 4D (x, y, theta, v), simulated in Gazebo. PLACEHOLDER:
-# Gazebo model, dynamics parameters and sensor to be filled; dynamics come from
-# FaST-BRT.
+# Quanser QBot Platform -- Dubins 4D (x, y, theta, v), control (a, w). Hexagonal base 570 mm across, 227 mm high,
+# 2-wheel differential drive with castors (quanser.com datasheet; QLabs QBot Platform docs for the frames).
+# Limits as in the hj_nav paper (sections/Simulation.tex). Model units (fast-brt's 4D V0): time 1 / w_max = 2 s,
+# length v_max / w_max = 1.6 m, so w_max = 1, v_max = 1, v_min = -0.25, a_max = 1.25.
 name: qbot
-status: placeholder
-dynamics: dubins4d
-phys: {}
-footprint_radius: null
+status: ready
+dynamics: dubins4d               # model name; fast-brt's dubins_4d (speed limits in the dynamics)
+phys:
+  v_min: -0.2                    # m/s, reversing
+  v_max: 0.8                     # m/s (QBot nominal motion 0.7 m/s, maximum 1.5 m/s)
+  a_max: 0.5                     # m/s^2 (QBot nominal 0.5, maximum 1.0)
+  w_max: 0.5                     # rad/s
+  track_width: 0.390             # m, wheel separation (QLabs: wheels 0.195 m left and right of the base frame)
+  wheel_v_max: 1.5               # m/s: needs max(|v_min|, v_max) + w_max * track_width / 2 <= this
+footprint_radius: 0.285          # m, half the 570 mm across the hexagonal base, around the base frame (between the
+                                 # drive wheels)
 sensor:
-  type: lidar2d
-  range: null
-  fov: 6.283185307179586
-  n_rays: null
-  rate_hz: null
-ctrl_dt: null
+  type: lidar2d                  # 2D 360-degree LiDAR, 16,800 points per second
+  range: 2.0                     # m, software cut-off
+  range_min: 0.15                # m
+  height: 0.207                  # m, scan plane above the floor (QLabs: LiDAR 0.207 m high)
+  offset: [0.221, 0.0]           # m, LiDAR position in the robot frame: 0.221 m ahead of the base frame (QLabs)
+  fov: 6.283185307179586         # rad
+  n_rays: 360                    # simulated beams (the real scan has about 1680 points per turn at 10 Hz)
+  rate_hz: 10.0
+ctrl_dt: 0.1                     # s, one control period per scan
 map:
-  origin: null
-  size: null
-  resolution: null
-world: null
-base_value: null
+  origin: [-1.9, -1.9]           # m, lower-left corner (walls inside the map)
+  size: [3.8, 3.8]               # m
+  resolution: 0.04               # m / cell
+world: turtlebot3/turtlebot3_controls/worlds/qbot_arena.world
+base_value: fast-brt/results/v0/v0_dubins_4d_linear_alpha20_low.npz      # offline V0 (fast-brt export-v0,
+                                 # configs/v0_dubins_4d.json), relative to the repo root; not in git

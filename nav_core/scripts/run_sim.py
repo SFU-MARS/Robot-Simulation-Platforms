@@ -13,6 +13,8 @@ found without PYTHONPATH).
     PYTHONPATH=. python scripts/run_sim.py --goal 0.7 0.2 --x0 -0.8 -0.8 0.2 --out outputs/sim_burger.png
     PYTHONPATH=. python scripts/run_sim.py --nominal mppi --filter backup \
         --world ../turtlebot3/turtlebot3_controls/worlds/occluded_4x4.world --x0 -0.9 -1.4 0 --goal 0.9 -0.3 --t-max 100
+    PYTHONPATH=. python scripts/run_sim.py --robot qbot --x0 -1.2 0 0 --goal 1.2 -1.2 --nominal mppi --filter hj_backup \
+        --out outputs/sim_qbot.png                                           # the QBot (Dubins 4D) in its arena
 """
 
 from __future__ import annotations

@@ -22,6 +22,7 @@
 | [12 local update 的 BRT 版本](12_local_update_brt.md) | BRS 为什么不能避障、为什么不能事后补成 BRT、HJ_local_update 改了什么、验证结果 |
 | [13 在线修 leaking corner](13_online_local_update.md) | 稳态 local update（只用收敛的 V₀，不要时间历史）：为什么改计划、收敛证据、插值风险、进度 |
 | [14 ROS 2 上机测试指南](14_ros2_desktop_test.md) | 给同事：desktop + Gazebo 上第一次实跑 `fastbrt_nav` 的步骤、测试项和预期、要交回的数据 |
+| [15 QBot（Dubins 4D）](15_qbot_dubins4d.md) | 能刹车的车：单位、速度上下限（动力学限幅）、4D 离线 V₀、刹停的后路、新地图、结果 |
 
 只想快速上手：读 [01](01_overview.md) 和 [07](07_mppi_walkthrough.md) 就够。想知道现在做到哪了：读 [11 路线图](11_roadmap.md)。
 
@@ -33,6 +34,7 @@
 | **safety filter / gatekeeper** | 检查 nominal 命令，不安全就拒绝，改用已验证的备用方案 |
 | **witness** | 一条已验证的"后路"：一段 rollout + 末端的 loiter circle，全程不碰障碍 |
 | **loiter circle** | 恒速机器人"原地等待"的唯一方式：方向打死绕最小圆 |
+| **刹停（4D 的后路）** | 能刹车的机器人（QBot）的"原地等待"：刹到 v = 0 停住，见 [15](15_qbot_dubins4d.md) |
 | **primitive** | FaST-BRT 的 facing-side primitive，一条障碍边对应一个，见 [05](05_safety_filter.md) |
 | **region** | 机器人可用的自由区域（outer ring + 孤立障碍的 inner rings） |
 | **face** | 障碍某一面的包裹直线，长度即该面的估计长度 |
