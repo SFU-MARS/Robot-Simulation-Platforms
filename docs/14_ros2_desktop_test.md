@@ -43,6 +43,7 @@ nproc
 sudo apt install ros-humble-gazebo-ros-pkgs ros-humble-turtlebot3-gazebo ros-humble-turtlebot3-description \
                  python3-numpy python3-scipy python3-yaml python3-pip
 pip3 install --user "contourpy<1.1"   # jammy 没有 python3-contourpy；1.0.x 支持 numpy 1.21
+pip3 install --user "numba==0.56.4"    # 可选：拐角修正编译执行，结果和 numpy 逐位相同、快 10 倍以上；不装也能跑
 ```
 
 ### 第 1 步：代码和 V₀

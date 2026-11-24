@@ -130,7 +130,7 @@
   - **离线 V₀ 完成**（2026-11-23）：mars-14 解 143 s，release `v0-2026-11-23`；odp 和 numpy（小配置）逐点一致到 float32 舍入；正对墙全速时能躲开的最近距离 0.636 m（直线刹车 0.640 m）；
   - **在线（无 ROS）完成**（2026-11-23，[15](15_qbot_dubins4d.md)）：`robots/qbot.yaml`、精确的 4D 车模型、4D 的 pursuit / MPPI、三种 filter（后路 = 刹停）、`rect_margin`（4D 的后路只用可行区域）、新地图 `qbot_arena` / `qbot_occluded`、`filter_batch.py --robot qbot`；
   - **批量**（[15](15_qbot_dubins4d.md) §15.6，`docs/figures/batch_qbot.csv`）：`backup`、`hj_backup` 在两张地图、两种 nominal 下都 0 碰撞；`hj` 跟着 pursuit 撞 2 + 2 次（凹角漏）；MPPI 本身不撞，filter 几乎不介入；pursuit 加 filter 常常停住（超时）；
-  - **4D 拐角修正**（2026-11-23，[15](15_qbot_dubins4d.md) §15.8）：`fast_brt.corner` 推广到 4D 窗口（按刹车距离定大小，`window_defaults`），L 形凹角上并集漏 493 个状态，修正后剩 3 个；`PrimitiveV0.min_value`（剪枝，U 快 4 倍）。**但一个窗口 1–6 s**，QBot 在线用不了；`hj` 的默认仍是 3D 开、4D 关。提速方向待定：离线的拐角 primitive 库（常见角度，如 90°）、编译的核（HeteroCL 要 odp 环境；numba）、或只在仿真里用 `delayed`；
+  - **4D 拐角修正**（2026-11-23，[15](15_qbot_dubins4d.md) §15.8）：`fast_brt.corner` 推广到 4D 窗口（按刹车距离定大小，`window_defaults`），L 形凹角上并集漏 493 个状态，修正后剩 3 个；`PrimitiveV0.min_value`（剪枝，U 快 4 倍）。**但一个窗口 1–6 s**，QBot 在线用不了；`hj` 的默认仍是 3D 开、4D 关。提速：用户选了 numba（方法不变、任意角度；离线拐角库"不 general"，不做）：`fast_brt/corner_numba.py`（可选依赖），和 numpy 逐位相同，最大的窗口 12.9 s → 0.95 s；剩下的问题是面一抖就重算（`corner_reuse`）和约 1 s 的延迟；
   - 待做：ROS 节点的 (a, ω) 和 QBot 的 Gazebo 模型；
 - [ ] 6D 无人机：确认模型（HJ_local_update 的 `quadrotor_6d` 是竖直平面四旋翼，不是水平面导航）、传感器、仿真器；
 - [ ] Dubins3D 的参数扫描（是否改用 `Dubins3D2Ctrl`）。

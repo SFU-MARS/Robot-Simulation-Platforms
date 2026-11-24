@@ -48,6 +48,7 @@ Robots:
   - ROS-free; never import `rclpy` in it;
   - keep it compatible with Python 3.10 and numpy 1.21 (ROS 2 Humble);
   - numpy, scipy, contourpy and pyyaml only.
+- **numba (optional):** `fast_brt/corner_numba.py` compiles the corner correction (bit for bit the numpy result); used when numba is installed (`numba==0.56.4` with numpy 1.21 on Humble), never required.
 - **odp:**
   - `optimized_dp` (odp) solves need HeteroCL and run offline on the desktop (mars-14, Python 3.8). Scripts meant for it must stay Python 3.8 compatible.
   - Online code may import odp's `Grid` / index utilities, which don't need HeteroCL.
