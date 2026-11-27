@@ -106,7 +106,7 @@ def cases(world, profile, seed=1):
 
 
 def run(profile, world, v0, kw, unknown="occupied", nominal="mppi", kind="backup", t_max=100.0, corner_kw=None,
-        margin=None, goal_radius=0.1, label=None):
+        margin=None, goal_radius=0.1, label=None, extra_kw=None):
     """One batch with filter ``kind`` (backup | hj | hj_backup | none); v0 and kw (placement) are ignored without a filter.
     Every episode is also recorded in EPISODES (with ``label``), the same episode index for the same world in every
     batch: the same start, goal and seeds, so batches that differ in one setting compare episode by episode."""
@@ -116,7 +116,7 @@ def run(profile, world, v0, kw, unknown="occupied", nominal="mppi", kind="backup
     step_all, path_ratio = [], []
     todo = cases(world, profile)
     for i, (x0, goal) in enumerate(todo):
-        extra = {} if margin is None else {"margin": margin}
+        extra = dict({} if margin is None else {"margin": margin}, **(extra_kw or {}))
         gate = make_filter(profile, kind, v0, unknown=unknown,
                            **(dict(kw, **(corner_kw or {}), **extra) if kind != "none" else {}))
         grid = None if world["grid"] is None else OccupancyGrid(*world["grid"], profile.map.resolution)
@@ -211,7 +211,8 @@ def main():
                     help="reached within this distance (m); default 0.1 (Burger), 0.2 (QBot, 0.57 m wide)")
     ap.add_argument("--unknowns", nargs="+", default=["occupied"], choices=["occupied", "free"])
     ap.add_argument("--nominals", nargs="+", default=["mppi"], choices=["mppi", "pursuit"])
-    ap.add_argument("--filters", nargs="+", default=["backup"], choices=["backup", "hj", "hj_backup", "none"])
+    ap.add_argument("--filters", nargs="+", default=["backup"], choices=["backup", "hj", "hj_backup", "hj_cbf", "none"])
+    ap.add_argument("--gamma", type=float, default=None, help="hj_cbf: alpha * dt per sub-step (default the filter's)")
     ap.add_argument("--ranges", nargs="+", type=float, default=[None],
                     help="LiDAR ranges (m) instead of the profile's")
     ap.add_argument("--corners", action="store_true",
@@ -256,11 +257,12 @@ def main():
                "placement": "" if v0 is None else placement,
                "corners": ((args.corner_mode + (", with frontier" if args.corner_frontier else ""))
                            if args.corners else "") if v0 is not None else "",
-               "margin_m": "" if args.margin is None or kind not in ("hj", "hj_backup") else args.margin,
+               "margin_m": "" if args.margin is None or kind not in ("hj", "hj_backup", "hj_cbf") else args.margin,
                **run(profile, all_worlds[wname], v0, PLACEMENTS.get(placement, {}), unknown or "occupied", nominal,
                      kind, t_max=args.t_max, goal_radius=args.goal_radius, label=args.label, corner_kw=dict(corners=True, corner_theta=args.corner_theta, corner_mode=args.corner_mode,
                                     corner_frontier=args.corner_frontier)
-                     if args.corners else dict(corners=False), margin=args.margin if kind in ("hj", "hj_backup") else None)}
+                     if args.corners else dict(corners=False), margin=args.margin if kind in ("hj", "hj_backup", "hj_cbf") else None,
+                     extra_kw={"gamma": args.gamma} if kind == "hj_cbf" and args.gamma is not None else None)}
         rows.append(row)
         print(" | ".join(f"{k} {v}" for k, v in row.items()), flush=True)
     out = Path(args.out)

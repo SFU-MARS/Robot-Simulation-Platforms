@@ -1,18 +1,20 @@
 """
 Safety filters for ``nav_core.sim`` (and the ROS 2 node): ``backup`` (``BackupFilter``), ``hj``
-(``HJFilter``) and ``hj_backup`` (``HJBackupFilter``), on a common scene (``scene.py``).  The HJ value of the primitives comes from an offline V0 read
+(``HJFilter``), ``hj_backup`` (``HJBackupFilter``) and ``hj_cbf`` (``HJCBFFilter``, a discrete-time CBF on the HJ
+value), on a common scene (``scene.py``).  The HJ value of the primitives comes from an offline V0 read
 with ``fast_brt.query`` (SFU-MARS/fast-brt, numpy only).
 """
 
 from .backup_filter import BackupFilter
+from .cbf_filter import HJCBFFilter
 from .hj_filter import HJBackupFilter, HJFilter
 from .scene import Scene, SceneFilter, load_v0, place_faces
 from .witness import find_witness
 
-__all__ = ["FILTERS", "BackupFilter", "HJBackupFilter", "HJFilter", "Scene", "SceneFilter", "find_witness", "load_v0",
+__all__ = ["FILTERS", "BackupFilter", "HJBackupFilter", "HJCBFFilter", "HJFilter", "Scene", "SceneFilter", "find_witness", "load_v0",
            "make_filter", "place_faces"]
 
-FILTERS = {"backup": BackupFilter, "hj": HJFilter, "hj_backup": HJBackupFilter}
+FILTERS = {"backup": BackupFilter, "hj": HJFilter, "hj_backup": HJBackupFilter, "hj_cbf": HJCBFFilter}
 
 
 def make_filter(profile, kind: str, v0=None, **kw):

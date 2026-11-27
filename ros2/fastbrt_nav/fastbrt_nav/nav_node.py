@@ -72,7 +72,7 @@ class FastBrtNav(Node):
         P("goal_radius", 0.1)
         P("spawn", [-0.8, -0.8, 0.2])             # spawn pose (x, y, yaw) = odom origin in the world
         P("nominal", "mppi")                      # pursuit | mppi
-        P("filter", "backup")                     # none | backup | hj | hj_backup
+        P("filter", "backup")                     # none | backup | hj | hj_backup | hj_cbf
         P("unknown", "occupied")                  # backup filter mode: occupied | free
         P("primitives", "faces")                  # backup filter primitives: faces | rings
         P("v0", "")                               # filter V0 file; "": the profile's base_value
@@ -104,7 +104,7 @@ class FastBrtNav(Node):
                 kw["corners"] = corners == "true"
             elif corners != "auto":
                 raise ValueError(f"corners must be auto, true or false, got {g('corners')!r}")
-            if g("filter") in ("hj", "hj_backup") and float(g("margin")) >= 0:
+            if g("filter") in ("hj", "hj_backup", "hj_cbf") and float(g("margin")) >= 0:
                 kw["margin"] = float(g("margin"))
             self.safety = make_filter(self.profile, g("filter"), g("v0") or None, **kw)
 

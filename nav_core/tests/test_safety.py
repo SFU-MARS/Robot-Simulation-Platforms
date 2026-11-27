@@ -328,3 +328,34 @@ def test_corner_window_reuse_ignores_splits_and_far_ends():
     assert _segments_close(clip(floor), clip(jitter), 0.06)
     assert not _segments_close(clip(floor), clip(moved), 0.06)
     assert len(_clip_segments(np.array([[[5.0, 5.0], [6.0, 6.0]]]), (0.0, 0.0), 2.0)) == 0
+
+
+def test_cbf_controls_keep_the_nominal_or_change_it_as_little_as_needed():
+    """The discrete CBF step on a wall (h = y): the nominal rate when it keeps h(x+) >= (1 - gamma) h(x), else the
+    closest rate that does; inside the tube (h < 0) h has to recover; Dubins 4D gives (a, w) rows"""
+    from types import SimpleNamespace
+    from nav_core.robots.dynamics import Dubins4D
+    from nav_core.safety.cbf_filter import cbf_controls
+    wall = SimpleNamespace(hj_margin=lambda z: np.atleast_2d(z)[:, 1])
+    far = np.array([0.0, 2.0, 0.0])                              # parallel to the wall, far from it
+    us, modified, infeasible = cbf_controls(wall, far, np.array([-0.3]), 4, 0.05, 0.2)
+    assert not modified and np.allclose(us, -0.3) and infeasible == 0
+    from nav_core.safety.witness import arc_step
+    near = np.array([0.0, 0.12, -0.5])                           # the nominal hard right breaks the condition
+    us, modified, _ = cbf_controls(wall, near, np.array([-1.0]), 1, 0.05, 0.2)
+    zz = near[None].copy()
+    arc_step(zz, np.array([us[0, 0]]), 0.05)
+    assert modified and us[0, 0] > -1.0 and zz[0, 1] >= 0.8 * near[1]
+    hopeless = np.array([0.0, 0.05, -1.2])                       # no rate keeps y >= 0.04 within one sub-step
+    us, _, infeasible = cbf_controls(wall, hopeless, np.array([-1.0]), 1, 0.05, 0.2)
+    assert infeasible == 1 and us[0, 0] == 1.0                  # the rate that keeps h highest: turn away
+    inside = np.array([0.0, -0.02, 1.2])                         # in the tube, heading out
+    us, _, _ = cbf_controls(wall, inside, np.array([0.0]), 4, 0.05, 0.2)
+    zz = inside[None].copy()
+    for u in us:
+        arc_step(zz, np.array([u[0]]), 0.05)
+    assert zz[0, 1] > inside[1]                                 # h recovers
+    plant = Dubins4D(-0.25, 1.0, 1.25, 1.0)
+    wall4 = SimpleNamespace(hj_margin=lambda z: np.atleast_2d(z)[:, 1] - 0.4 * np.maximum(np.atleast_2d(z)[:, 3], 0))
+    us, modified, _ = cbf_controls(wall4, np.array([0.0, 0.5, -1.5, 0.8]), np.array([1.25, 0.0]), 2, 0.025, 0.2, plant=plant)
+    assert us.shape == (2, 2) and modified and us[:, 0].min() < 1.25   # less acceleration towards the wall

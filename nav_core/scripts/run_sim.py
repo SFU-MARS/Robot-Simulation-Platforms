@@ -88,7 +88,7 @@ def main():
     ap.add_argument("--noise", type=float, default=0.0, help="range noise std (m)")
     ap.add_argument("--nominal", default="pursuit", choices=["pursuit", "mppi"])
     ap.add_argument("--sensing-range", type=float, default=None, help="override the profile's LiDAR range (m)")
-    ap.add_argument("--filter", default="none", choices=["none", "backup", "hj", "hj_backup"],
+    ap.add_argument("--filter", default="none", choices=["none", "backup", "hj", "hj_backup", "hj_cbf"],
                     help="backup: the backup filter; hj: the classic HJ filter; hj_backup: HJ, with the backup filter "
                          "as a safety net (all need the profile's V0 file)")
     ap.add_argument("--unknown", default="occupied", choices=["occupied", "free"],
